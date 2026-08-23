@@ -1,0 +1,12 @@
+# 版本已核对至 2026-04 最新
+# 说明: copilotkit(Python SDK) 0.1.95 的 LangGraphAGUIAgent 与 ag-ui-langgraph 0.0.43
+#       的 clone() 签名不兼容, 故直接使用 ag-ui-langgraph 原生 LangGraphAgent。
+ag-ui-langgraph==0.0.43
+langgraph==1.2.11
+langchain-openai==1.6.0
+langchain-core==1.6.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-dotenv==1.2.3
+# 仅测试脚本用（直接调用 AG-UI 端点验证 SSE 流）
+httpx==0.28.1

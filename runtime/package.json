@@ -1,0 +1,14 @@
+{
+  "name": "buddhist-agent-poc-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CopilotKit Runtime: 对接 backend 的 LangGraph (AG-UI) agent",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.ts",
+    "dev": "node --watch --env-file-if-exists=.env server.ts"
+  },
+  "dependencies": {
+    "@copilotkit/runtime": "1.69.0"
+  }
+}
