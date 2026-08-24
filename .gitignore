@@ -3,3 +3,12 @@
 *.log
 .vscode/
 .idea/
+.eas-config/
+.expo-home/
+.npm-cache/
+
+# EAS CLI 本地安装目录（含 node_modules，非项目代码）
+eas-tool/
+
+# dev-up.sh 运行日志与 pid 文件
+logs/
