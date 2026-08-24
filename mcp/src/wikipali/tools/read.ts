@@ -85,9 +85,9 @@ export function registerReadTools(server: McpServer): void {
 
   registerJsonTool(server, "wikipali_toc", {
     title: "章节目录",
-    description: "章节目录：给 book:paragraph 任意段号，返回所属丛书的目录（默认过滤到当前这本书）。",
+    description: "章节目录：给 book-paragraph 任意段号，返回所属丛书的目录（默认过滤到当前这本书）。",
     inputSchema: {
-      coord: z.string().describe("book:paragraph，如 216:512"),
+      coord: z.string().describe("book-paragraph，如 216-512"),
       depth: z.number().int().positive().default(4).describe("最多显示到第几层"),
       all: z.boolean().default(false).describe("显示整套丛书而不只当前这本"),
     },
@@ -97,7 +97,7 @@ export function registerReadTools(server: McpServer): void {
     title: "段落清单（不取正文）",
     description: "章节内全部段落的清单：标题层级 + 每段字符数，不取正文。用于规划分批读取或翻译/校对工作量。",
     inputSchema: {
-      coord: z.string().describe("book:paragraph，正文段也行，会自动向上找章节"),
+      coord: z.string().describe("book-paragraph，正文段也行，会自动向上找章节"),
       body: z.boolean().default(false).describe("连每个正文段的字符数一起列出"),
       depth: z.number().int().positive().default(9).describe("最多显示到第几层标题"),
       here: z.boolean().default(false).describe("给正文段时不向上找章节，只报这一段"),
@@ -108,7 +108,7 @@ export function registerReadTools(server: McpServer): void {
     title: "章节体量与导航（只报体量）",
     description: "章节体量与导航：范围、段数、字符数、上一章/下一章、路径。只报体量，不取正文。",
     inputSchema: {
-      coord: z.string().describe("book:paragraph，正文段也行，会自动向上找章节"),
+      coord: z.string().describe("book-paragraph，正文段也行，会自动向上找章节"),
     },
   }, async (args) => read.chapterMeta(makeClient(), args));
 
@@ -116,7 +116,7 @@ export function registerReadTools(server: McpServer): void {
     title: "整章取文",
     description: "取整章内容（先看 wikipali_chapter 报的体量再决定是否取）。缺省取巴利原文；给 channel 则取该版本（一次一个）。",
     inputSchema: {
-      coord: z.string().describe("book:paragraph，正文段也行，会自动向上找章节"),
+      coord: z.string().describe("book-paragraph，正文段也行，会自动向上找章节"),
       channel: z.string().optional().describe("channel uid；缺省取巴利原文"),
       via: z.enum(["tipitaka-content", "chapter-content"]).default("tipitaka-content").describe("取文端点：默认 tipitaka-content；chapter-content 返回逐句多版本结构"),
       text: z.boolean().default(true).describe("输出纯文本（黑体转 **），false 保留 HTML"),
@@ -140,9 +140,9 @@ export function registerReadTools(server: McpServer): void {
 
   registerJsonTool(server, "wikipali_get", {
     title: "按坐标取文",
-    description: "按坐标取原文/译文：book:paragraph + channel。缺省取巴利原文。",
+    description: "按坐标取原文/译文：book-paragraph + channel。缺省取巴利原文。",
     inputSchema: {
-      coords: z.array(z.string()).min(1).describe("坐标数组，如 ['216:35', '216:36']"),
+      coords: z.array(z.string()).min(1).describe("坐标数组，如 ['216-35', '216-36']"),
       channels: z.array(z.string()).optional().describe("channel uid，可多个；缺省取巴利原文"),
       limit: z.number().int().positive().default(200).describe("每次请求最多取几句"),
     },
@@ -152,7 +152,7 @@ export function registerReadTools(server: McpServer): void {
     title: "某坐标有哪些译本",
     description: "某坐标有哪些译本/版本，以及缺哪些语言。",
     inputSchema: {
-      coord: z.string().describe("book:paragraph"),
+      coord: z.string().describe("book-paragraph"),
     },
   }, async (args) => read.versions(makeClient(), args));
 
@@ -186,7 +186,7 @@ export function registerReadTools(server: McpServer): void {
     title: "本文↔义注↔复注段落对应",
     description: "本文 ↔ 义注 ↔ 复注的段落对应（CST 锚点）。找注释的正确方式，不要回头去注释书里搜关键词。",
     inputSchema: {
-      coord: z.string().describe("book:paragraph"),
+      coord: z.string().describe("book-paragraph"),
     },
   }, async (args) => read.related(makeClient(), args));
 

@@ -96,21 +96,27 @@ export async function search(
   );
   const rows = rowsOf(data);
   const count = (data as Row)?.count ?? 0;
-  const out = rows.map((r) => ({
+  
+  const out = rows.map((r) => {
+    const coord=fmtCoord(r.book, r.paragraph);
+    return {
     book: r.book,
     paragraph: r.paragraph,
-    coord: fmtCoord(r.book, r.paragraph),
+    coord: coord,
+    ref:coord,
+    link:`https://next.wikipali.org/library/tipitaka/${coord}/read?channel=translation`,
     path: fmtPath(r.path),
     rank: r.rank,
     highlight: snippet(stripMarkup(r.highlight), args.width, "【"),
-  }));
+  }
+  });
   return {
     count,
     offset: args.offset,
     rows: out,
     notes: [
       `命中 ${count} 段（这里是段落数，不是词次数）。`,
-      "引用时用坐标 book:paragraph；取原文用 wikipali_get。",
+      "引用时用坐标 book-paragraph；取原文用 wikipali_get。",
       "检索前必须先展开词形（wikipali_forms 或给 lemma）——直接拿词典形会 0 条且不报错。",
     ],
   };

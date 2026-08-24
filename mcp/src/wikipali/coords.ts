@@ -2,17 +2,17 @@
  * 坐标与引用（对应 lib/coords.py）。
  *
  * WikiPali 的最小可引用单位是 (book, paragraph)，句子再细分 word_start/word_end。
- * 坐标书写形式统一为 `book:paragraph`，例如 `216:35`。
+ * 坐标书写形式统一为 `book-paragraph`（横杠），例如 `216-35`；解析时冒号/下划线也接受。
  */
 
 import { WpError } from "./errors.ts";
 
-const COORD_RE = /^\s*(\d+)\s*[:\-_]\s*(\d+)\s*$/;
+const COORD_RE = /^\s*(\d+)\s*[-:_]\s*(\d+)\s*$/;
 
 export function parseCoord(text: string | number): [number, number] {
   const m = COORD_RE.exec(String(text));
   if (!m) {
-    throw new WpError(`坐标格式不对：${text}（应为 book:paragraph，如 216:35）`);
+    throw new WpError(`坐标格式不对：${text}（应为 book-paragraph，如 216-35）`);
   }
   return [Number(m[1]), Number(m[2])];
 }
@@ -32,7 +32,7 @@ export function parseCoords(items: string[]): Record<number, number[]> {
 }
 
 export function fmtCoord(book: number | undefined, paragraph: number | undefined): string {
-  return `${book}:${paragraph}`;
+  return `${book}-${paragraph}`;
 }
 
 export interface PathItem {

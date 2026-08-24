@@ -539,7 +539,7 @@ async function resolveSentence(
   args: { coord?: string; sent?: string; channel?: string; words?: string },
 ): Promise<{ uid: string; desc: string }> {
   if (args.sent) return { uid: args.sent, desc: `句子 ${args.sent}` };
-  if (!args.coord) throw new WpError("要么给坐标（如 216:35），要么用 sent 直接指定句子 uid。");
+  if (!args.coord) throw new WpError("要么给坐标（如 216-35），要么用 sent 直接指定句子 uid。");
 
   const [book, para] = parseCoord(args.coord);
   // 讨论的 channel 缺省为巴利原文；要挂到某译本就给该 channel 的 uid（不做名字解析，避免需要 userToken）

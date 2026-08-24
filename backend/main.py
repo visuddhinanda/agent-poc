@@ -21,11 +21,9 @@ AGENT_NAME = "pali_agent"
 app = FastAPI(title="Buddhist Pali Q&A Agent (LangGraph + AG-UI)", version="0.1.0")
 
 
-# 【mock 阶段】只暴露 retrieve_sutta_passage（返回结构化 citations 的 mock 检索），
-# 确保前端 useRenderTool 的「引用卡片」链路先跑通。
-# 接真实 RAG 时置为 False：恢复 [retrieve_sutta_passage, *wikipali_tools]，
-# 并把 retrieve_sutta_passage 内部改为调用 wikipali MCP 返回真实 citations。
-USE_MOCK_RETRIEVAL_ONLY = True
+# 【真实查询】False：连接 MCP server，暴露 wikipali_* 工具给 LLM。
+# 【mock 阶段】True：只暴露 retrieve_sutta_passage（结构化 citations 的 mock 检索）。
+USE_MOCK_RETRIEVAL_ONLY = False
 
 
 def _load_tools_and_build_graph():
@@ -39,8 +37,7 @@ def _load_tools_and_build_graph():
     try:
         mcp_client, wikipali_tools = asyncio.run(load_wikipali_tools())
         print(f"[mcp] 已连接 MCP server，加载 {len(wikipali_tools)} 个 wikipali 工具")
-        tools = [retrieve_sutta_passage, *wikipali_tools]
-        return build_graph(tools=tools), mcp_client
+        return build_graph(tools=wikipali_tools), mcp_client
     except Exception as exc:  # MCP 不可用时降级，保证服务仍能起
         print(f"[warn] 无法连接 MCP server（{exc}），回退到 mock 经文检索工具")
         return build_graph(), None

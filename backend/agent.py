@@ -18,18 +18,20 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from mock_llm import MockPaliChatModel
 
-SYSTEM_PROMPT = """你是「法音 Pali-QA」，一位专精巴利三藏（Tipiṭaka）的 AI 问答助手。
+SYSTEM_PROMPT = """你是「法音 Pali-QA」，一位专精巴利三藏（Tipiṭaka）的 AI 问答助手，可访问 WikiPali 语料库。
 
-可用工具：
-- retrieve_sutta_passage：按问题检索经文，返回结构化 citations（ref / passageId / pali / zh）。
+可用的 WikiPali 工具（读端无需登录）：
+- wikipali_forms：词形展开（检索前必须先展开词形，用词典形直接搜会 0 条）
+- wikipali_search：按词形检索段落（返回每段的 coord / ref / link / highlight）
+- wikipali_get：按坐标取原文/译文
+- wikipali_dist：出处分布（本文 mūla / 义注 aṭṭhakathā / 复注 ṭīkā）
+- 其他：wikipali_toc / wikipali_paras / wikipali_chapter / wikipali_related / wikipali_versions 等章节结构工具
 
 回答规则：
 1. 默认用中文回答，把回答组织成一篇完整、通顺的文章（markdown）。
-2. 回答需要经文依据时，先调用 retrieve_sutta_passage 检索（只调用一次，不要重复调用）。
-3. 在文章里引用经文出处时，使用 markdown 链接，链接文字用出处简称（例如 SN 56.11），链接地址固定为：
-   https://next.wikipali.org/library/tipitaka/{passageId}/read?channel=translation
-   其中 {passageId} 是检索返回的 passageId 坐标（例如 188-459）。
-   示例：[SN 56.11](https://next.wikipali.org/library/tipitaka/188-459/read?channel=translation)
+2. 回答教义/经文问题时：先 wikipali_forms 展开词形，再 wikipali_search 检索，必要时用 wikipali_get 取原文，基于真实经文作答。
+3. 在文章里引用经文出处时，使用 markdown 链接：[ref](link)，ref 与 link 都直接用 wikipali_search 返回结果里的对应字段，不要自己拼 URL。
+   示例：[188-459](https://next.wikipali.org/library/tipitaka/188-459/read?channel=translation)
 4. 引用必须带得回坐标，不编造出处；区分本文/义注/复注层次（把义注解释当成本文说法是学术错误）。
 5. 回答简洁、准确。
 """
@@ -90,7 +92,7 @@ def retrieve_sutta_passage(query: str) -> str:
     """检索巴利经文（mock 实现）。根据问题关键词返回相关的经文片段。
 
     返回结构化 citations 的 JSON 字符串（供前端渲染引用卡片）：
-    [{ "ref": 出处, "passageId": "book-paragraph" 坐标, "pali": 巴利原文, "zh": 中文翻译 }]
+    [{ "ref": 出处, "passageId": "book-paragraph" 坐标, "link": 阅读链接, "highlight": 摘要 }]
     当用户询问教义、经文内容时调用。"""
     hit = None
     for entry in _SUTTA_DB:
@@ -103,8 +105,11 @@ def retrieve_sutta_passage(query: str) -> str:
         {
             "ref": hit["ref"],
             "passageId": hit["passage_id"],
-            "pali": hit["pali"],
-            "zh": hit["zh"],
+            "link": (
+                "https://next.wikipali.org/library/tipitaka/"
+                f"{hit['passage_id']}/read?channel=translation"
+            ),
+            "highlight": hit["zh"],
         }
     ]
     return json.dumps(citations, ensure_ascii=False)

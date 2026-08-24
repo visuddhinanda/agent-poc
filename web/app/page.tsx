@@ -2,27 +2,18 @@
 
 import { createContext, useContext, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CopilotKit, CopilotChat, useAgent } from "@copilotkit/react-core/v2";
+import { CopilotKit, CopilotChat, useAgent, useRenderTool } from "@copilotkit/react-core/v2";
 import { Streamdown } from "streamdown";
 
 // runtime 地址：默认本机 3001；部署时用 NEXT_PUBLIC_RUNTIME_URL 覆盖
 const runtimeUrl =
   process.env.NEXT_PUBLIC_RUNTIME_URL || "http://localhost:3001/api/copilotkit";
 
-// WikiPali 阅读器跳转基地址：配置文件 .env.local 可覆盖（NEXT_PUBLIC_WIKIPALI_BASE_URL）
-const wikipaliBaseUrl =
-  process.env.NEXT_PUBLIC_WIKIPALI_BASE_URL || "https://next.wikipali.org";
-
 interface Citation {
   ref: string;
   passageId: string;
-  pali: string;
-  zh: string;
-}
-
-/** passageId（如 188-459）→ 阅读器页面 URL */
-function readerUrl(passageId: string): string {
-  return `${wikipaliBaseUrl}/library/tipitaka/${passageId}/read?channel=translation`;
+  link: string;
+  highlight: string;
 }
 
 /** 从 /library/tipitaka/188-459/... 提取 passageId */
@@ -70,6 +61,54 @@ const popoverStyle: React.CSSProperties = {
   textAlign: "left",
 };
 
+const TOOL_LABELS: Record<string, string> = {
+  wikipali_forms: "展开词形",
+  wikipali_search: "检索经文",
+  wikipali_get: "取经文原文",
+  wikipali_dist: "统计出处分布",
+  wikipali_word: "查词典",
+  wikipali_count: "词频统计",
+  wikipali_terms: "查术语",
+  wikipali_books: "分类目录",
+  wikipali_toc: "章节目录",
+  wikipali_paras: "段落清单",
+  wikipali_chapter: "章节体量",
+  wikipali_chapter_fetch: "整章取文",
+  wikipali_versions: "查译本",
+  wikipali_related: "关联段落",
+  wikipali_articles: "文章列表",
+  wikipali_article: "读文章",
+  wikipali_anthology: "文集",
+};
+
+const toolBubbleStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  margin: "4px 0",
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "#efe8d8",
+  border: "1px solid #d8cdb4",
+  fontSize: "0.8em",
+  color: "#6b5f4e",
+};
+
+function ToolCallBubble(props: any) {
+  const { name, status } = props;
+  const running = status === "inProgress" || status === "executing";
+  const label = TOOL_LABELS[name] ?? name;
+  return (
+    <span style={toolBubbleStyle}>
+      <span>{running ? "⏳" : "✓"}</span>
+      <span>{label}</span>
+      <span style={{ color: running ? "#a06b2c" : "#4a7c59" }}>
+        {running ? "进行中…" : "完成"}
+      </span>
+    </span>
+  );
+}
+
 function CitationLink(props: any) {
   const { href, children, node, ...rest } = props;
   const citations = useContext(CitationsContext);
@@ -116,7 +155,7 @@ function CitationLink(props: any) {
       onMouseEnter={handleMouseEnter}
       onMouseLeave={() => setHover(false)}
     >
-      <a href={readerUrl(passageId)} target="_blank" rel="noopener noreferrer" style={tagStyle}>
+      <a href={citation?.link ?? href} target="_blank" rel="noopener noreferrer" style={tagStyle}>
         {children}
       </a>
       {hover && citation && pos
@@ -125,10 +164,7 @@ function CitationLink(props: any) {
               <span style={{ display: "block", fontWeight: 700, color: "#a06b2c", marginBottom: 6 }}>
                 📖 {citation.ref}
               </span>
-              <span style={{ display: "block", fontStyle: "italic", color: "#4a3d2d", marginBottom: 4 }}>
-                {citation.pali}
-              </span>
-              <span style={{ display: "block", color: "#6b5f4e" }}>{citation.zh}</span>
+              <span style={{ display: "block", color: "#6b5f4e" }}>{citation.highlight}</span>
             </span>,
             document.body
           )
@@ -148,15 +184,21 @@ function MarkdownRenderer(props: any) {
 
 function Chat() {
   const { agent } = useAgent({ agentId: "pali_agent" });
+  useRenderTool({ name: "*", render: ToolCallBubble }, []);
 
-  // 从工具返回结果里收集 passageId → citation 映射
+  // 从工具返回结果里收集坐标 → citation 映射。
+  // 兼容两种结构：mock 的 [{passageId, ...}] 数组，与 wikipali_search 的 {rows:[{coord, ...}]} 对象。
   const citations = new Map<string, Citation>();
   for (const m of agent.messages ?? []) {
     if (m.role === "tool" && typeof m.content === "string") {
       try {
-        const arr = JSON.parse(m.content);
-        for (const c of arr) {
-          if (c && c.passageId) citations.set(c.passageId, c);
+        const parsed = JSON.parse(m.content);
+        const rows = Array.isArray(parsed) ? parsed : parsed?.rows;
+        if (!Array.isArray(rows)) continue;
+        for (const c of rows) {
+          const key = c?.passageId ?? c?.coord;
+          // 只存带 link 的 citation（wikipali_search 的结果），忽略 get/dist/forms 等其他工具结果
+          if (key && c?.link) citations.set(key, c);
         }
       } catch {
         // 非 JSON 工具结果忽略
@@ -172,7 +214,6 @@ function Chat() {
           messageView: {
             assistantMessage: {
               markdownRenderer: MarkdownRenderer,
-              toolCallsView: () => null,
             },
           },
         }}

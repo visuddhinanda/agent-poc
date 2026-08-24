@@ -29,7 +29,7 @@ async def main() -> int:
 
     question = (
         "用 wikipali 检索巴利词 parivāsa（别住）：先展开词形，"
-        "再看它在律藏里的出处分布，最后取一段有代表性的原文（坐标 216:35 附近）。"
+        "再看它在律藏里的出处分布，最后取一段有代表性的原文（坐标 216-35 附近）。"
     )
     print(f"\n提问：{question}\n")
     result = await graph.ainvoke({"messages": [HumanMessage(content=question)]}, config)
