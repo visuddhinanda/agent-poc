@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 // CopilotKit 聊天组件的官方样式（经典 @copilotkit/react-ui）
-import "@copilotkit/react-ui/styles.css";
+import "@copilotkit/react-core/v2/styles.css";
 
 export const metadata: Metadata = {
   title: "巴利经文 AI 问答助手（POC）",
