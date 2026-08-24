@@ -5,6 +5,7 @@ ag-ui-langgraph==0.0.43
 langgraph==1.2.11
 langchain-openai==1.6.0
 langchain-core==1.6.0
+langchain-mcp-adapters==0.3.2
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 python-dotenv==1.2.3

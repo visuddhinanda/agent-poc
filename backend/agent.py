@@ -6,6 +6,7 @@
 
 POC 专用: 经文检索是硬编码的 mock 数据, 不接真实数据库。
 """
+import json
 import os
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
@@ -18,49 +19,66 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from mock_llm import MockPaliChatModel
 
 SYSTEM_PROMPT = """你是「法音 Pali-QA」，一位专精巴利三藏（Tipiṭaka）的 AI 问答助手。
-回答规则:
-1. 默认用中文回答；引用经文时同时给出巴利原文（拉丁转写）与中文翻译，并标注出处（如 SN 56.11）。
-2. 回答佛教教义类问题（四圣谛、八正道、缘起、无常、无我、慈等）前，必须先调用 retrieve_sutta_passage 检索经文，并基于检索到的经文作答。
-3. 回答要简洁、准确，不编造经文出处。
+
+可用工具：
+- retrieve_sutta_passage：按问题检索经文，返回结构化 citations（ref / passageId / pali / zh）。
+
+回答规则：
+1. 默认用中文回答，把回答组织成一篇完整、通顺的文章（markdown）。
+2. 回答需要经文依据时，先调用 retrieve_sutta_passage 检索（只调用一次，不要重复调用）。
+3. 在文章里引用经文出处时，使用 markdown 链接，链接文字用出处简称（例如 SN 56.11），链接地址固定为：
+   https://next.wikipali.org/library/tipitaka/{passageId}/read?channel=translation
+   其中 {passageId} 是检索返回的 passageId 坐标（例如 188-459）。
+   示例：[SN 56.11](https://next.wikipali.org/library/tipitaka/188-459/read?channel=translation)
+4. 引用必须带得回坐标，不编造出处；区分本文/义注/复注层次（把义注解释当成本文说法是学术错误）。
+5. 回答简洁、准确。
 """
 
 # ---------------------------------------------------------------------------
 # mock 经文数据库（硬编码示例，POC 专用，不接真实数据库）
 # ---------------------------------------------------------------------------
+# 注意：passage_id 为占位坐标（book-paragraph），仅用于打通「引用卡片 → 跳转阅读器」链路；
+# 真实坐标待接 wikipali MCP 真实检索后替换。
 _SUTTA_DB = [
     {
         "keywords": ["四圣谛", "四諦", "苦", "dukkha", "转法轮", "圣谛"],
         "ref": "SN 56.11 转法轮经（Dhammacakkappavattana Sutta）",
+        "passage_id": "188-459",
         "pali": "Idaṁ kho pana, bhikkhave, dukkhaṁ ariya-saccaṁ: jāti pi dukkhā, jarā pi dukkhā, byādhi pi dukkho, maraṇam pi dukkhaṁ ... saṅkhittena pañcupādānakkhandhā dukkhā.",
         "zh": "诸比丘！此是苦圣谛：生是苦，老是苦，病是苦，死是苦……简言之，五取蕴是苦。",
     },
     {
         "keywords": ["八正道", "八圣道", "magga", "正道", "道谛"],
         "ref": "SN 56.11 转法轮经（八支圣道部分）",
+        "passage_id": "188-460",
         "pali": "Ayaṁ eva ariyo aṭṭhaṅgiko maggo, seyyathidaṁ – sammādiṭṭhi, sammāsaṅkappo, sammāvācā, sammākammanto, sammā-ājīvo, sammāvāyāmo, sammāsati, sammāsamādhi.",
         "zh": "此即是八支圣道：正见、正思惟、正语、正业、正命、正精进、正念、正定。",
     },
     {
         "keywords": ["缘起", "因缘", "paticca", "十二因缘", "缘生"],
         "ref": "SN 12.2 缘起分别（Paṭiccasamuppāda）",
+        "passage_id": "188-461",
         "pali": "Avijjāpaccayā saṅkhārā; saṅkhārapaccayā viññāṇaṁ; viññāṇapaccayā nāmarūpaṁ ... Evametassa kevalassa dukkhakkhandhassa samudayo hoti.",
         "zh": "无明缘行，行缘识，识缘名色……如此，这纯大苦蕴集起。",
     },
     {
         "keywords": ["无常", "anicca", "诸行"],
         "ref": "Dhp 277（法句经）",
+        "passage_id": "188-462",
         "pali": "Sabbe saṅkhārā aniccā'ti, yadā paññāya passati; atha nibbindati dukkhe, esa maggo visuddhiyā.",
         "zh": "「诸行无常」，当以智慧观照时，则于苦厌离，此是清净之道。",
     },
     {
         "keywords": ["无我", "anatta", "五蕴"],
         "ref": "SN 22.59 无我相经（Anattalakkhaṇa Sutta）",
+        "passage_id": "188-463",
         "pali": "Rūpaṁ, bhikkhave, anattā ... vedanā anattā ... saññā anattā ... saṅkhārā anattā ... viññāṇaṁ anattā.",
         "zh": "诸比丘！色是无我，受是无我，想是无我，行是无我，识是无我。",
     },
     {
         "keywords": ["慈", "慈经", "metta", "善意"],
         "ref": "Khp 9 慈经（Mettā Sutta）",
+        "passage_id": "188-464",
         "pali": "Sukhinova khemino hontu, sabbe sattā bhavantu sukhitattā.",
         "zh": "愿一切众生快乐安稳，愿一切众生幸福。",
     },
@@ -69,8 +87,11 @@ _SUTTA_DB = [
 
 @tool
 def retrieve_sutta_passage(query: str) -> str:
-    """检索巴利经文（mock 实现）。根据问题关键词返回相关的经文片段，
-    包含出处、巴利原文与中文翻译。当用户询问教义、经文内容时调用。"""
+    """检索巴利经文（mock 实现）。根据问题关键词返回相关的经文片段。
+
+    返回结构化 citations 的 JSON 字符串（供前端渲染引用卡片）：
+    [{ "ref": 出处, "passageId": "book-paragraph" 坐标, "pali": 巴利原文, "zh": 中文翻译 }]
+    当用户询问教义、经文内容时调用。"""
     hit = None
     for entry in _SUTTA_DB:
         if any(k.lower() in query.lower() for k in entry["keywords"]):
@@ -78,11 +99,15 @@ def retrieve_sutta_passage(query: str) -> str:
             break
     if hit is None:
         hit = _SUTTA_DB[0]  # 未命中时兜底返回四圣谛
-    return (
-        f"[出处] {hit['ref']}\n"
-        f"[巴利原文] {hit['pali']}\n"
-        f"[中文] {hit['zh']}"
-    )
+    citations = [
+        {
+            "ref": hit["ref"],
+            "passageId": hit["passage_id"],
+            "pali": hit["pali"],
+            "zh": hit["zh"],
+        }
+    ]
+    return json.dumps(citations, ensure_ascii=False)
 
 
 def build_model():
@@ -151,14 +176,16 @@ def sanitize_messages_for_llm(messages):
     return cleaned
 
 
-def build_graph(model=None):
+def build_graph(model=None, tools=None):
     """构建 LangGraph agent 图。
 
     model 参数用于测试时注入其他模型；默认用 DeepSeek（无 key 时为 mock）。
+    tools 参数用于注入工具（如 MCP wikipali 工具）；缺省只用 mock 经文检索。
     带 MemorySaver checkpointer：AG-UI 协议需要按 thread 读取状态。
     """
     model = model or build_model()
-    llm = model.bind_tools([retrieve_sutta_passage])
+    tools = tools if tools is not None else [retrieve_sutta_passage]
+    llm = model.bind_tools(tools)
 
     def chatbot(state: MessagesState):
         """调用模型。与 CopilotKit/LangGraph 官方 quickstart 一致的写法：
@@ -169,7 +196,7 @@ def build_graph(model=None):
 
     builder = StateGraph(MessagesState)
     builder.add_node("chatbot", chatbot)
-    builder.add_node("tools", ToolNode([retrieve_sutta_passage]))
+    builder.add_node("tools", ToolNode(tools))
     builder.add_edge(START, "chatbot")
     builder.add_conditional_edges("chatbot", tools_condition)  # 有 tool_call -> tools, 否则 -> END
     builder.add_edge("tools", "chatbot")
