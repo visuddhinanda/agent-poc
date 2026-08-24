@@ -1,0 +1,30 @@
+{
+  "name": "agent-poc-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server scaffold (Model Context Protocol TypeScript SDK)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "login": "tsx src/login.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}

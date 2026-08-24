@@ -1,0 +1,33 @@
+# WikiPali MCP server（无状态 Streamable HTTP）
+#
+# 部署：
+#   1. 把本目录放到 /opt/wikipali-mcp（或改 WorkingDirectory）
+#   2. npm ci && npm run build   （或直接用 Dockerfile）
+#   3. sudo cp deploy/wikipali-mcp.service /etc/systemd/system/
+#   4. sudo useradd -r wikipali 2>/dev/null; sudo systemctl daemon-reload
+#      sudo systemctl enable --now wikipali-mcp
+#
+# 无状态：server 不读任何凭据文件；凭据由客户端经 HTTP Authorization / X-Wikipali-User-Token 头提供。
+
+[Unit]
+Description=WikiPali MCP server (stateless Streamable HTTP)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wikipali-mcp
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=MCP_HOST=127.0.0.1
+# 目标 WikiPali 站点（默认 www 稳定版；next 是最新代码）
+# Environment=WIKIPALI_API_URL=https://next.wikipali.org/api
+# 绑定非回环地址时的 Host 白名单
+# Environment=MCP_ALLOWED_HOSTS=mcp.example.com,localhost
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=3
+User=wikipali
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
