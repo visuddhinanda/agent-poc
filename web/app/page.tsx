@@ -1,9 +1,10 @@
 "use client";
 
-import { createContext, useContext, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CopilotKit, CopilotChat, useAgent, useRenderTool } from "@copilotkit/react-core/v2";
 import { Streamdown } from "streamdown";
+import { Sidebar } from "./Sidebar";
 
 // runtime 地址：默认本机 3001；部署时用 NEXT_PUBLIC_RUNTIME_URL 覆盖
 const runtimeUrl =
@@ -222,37 +223,93 @@ function Chat() {
   );
 }
 
-export default function Home() {
+function AppLayout() {
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // 断点切换时重置侧栏：手机默认收起为抽屉，桌面默认常驻展开
+  useEffect(() => {
+    setSidebarOpen(!isMobile);
+  }, [isMobile]);
+
   return (
-    <CopilotKit runtimeUrl={runtimeUrl} agent="pali_agent" useSingleEndpoint={false}>
-      <main
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          minHeight: "100vh",
-          background: "#f7f3ea",
-        }}
-      >
-        <h1 style={{ margin: "18px 0 4px", fontSize: 22, color: "#3a3128" }}>
-          巴利经文 AI 问答助手（POC）
-        </h1>
-        <p style={{ margin: 0, color: "#8a7a5c", fontSize: 14 }}>
-          Runtime: {runtimeUrl} · 试试问「什么是四圣谛？」「缘起是什么？」「慈经讲了什么？」
-        </p>
+    <div style={{ display: "flex", height: "100vh", background: "#f7f3ea", overflow: "hidden" }}>
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(58,49,40,.35)",
+            zIndex: 40,
+          }}
+        />
+      )}
+      <Sidebar open={sidebarOpen} isMobile={isMobile} onClose={() => setSidebarOpen(false)} />
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <header
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "10px 16px",
+            borderBottom: "1px solid #e4dbc6",
+            background: "#fdfaf1",
+          }}
+        >
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 6,
+              border: "1px solid #d8cdb4",
+              background: "#fdfaf1",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: 1,
+              color: "#3a3128",
+            }}
+          >
+            ☰
+          </button>
+          <h1 style={{ margin: 0, fontSize: 17, color: "#3a3128", fontWeight: 600 }}>
+            法音 · 巴利经文问答
+          </h1>
+        </header>
         <div
           style={{
             flex: 1,
-            width: "100%",
-            maxWidth: 760,
-            padding: 16,
-            boxSizing: "border-box",
             minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            padding: "16px",
           }}
         >
-          <Chat />
+          <p style={{ margin: "0 0 12px", color: "#8a7a5c", fontSize: 13 }}>
+            Runtime: {runtimeUrl} · 试试问「什么是四圣谛？」「缘起是什么？」「慈经讲了什么？」
+          </p>
+          <div style={{ flex: 1, width: "100%", maxWidth: 760, minHeight: 0 }}>
+            <Chat />
+          </div>
         </div>
-      </main>
+      </div>
+    </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <CopilotKit runtimeUrl={runtimeUrl} agent="pali_agent" useSingleEndpoint={false}>
+      <AppLayout />
     </CopilotKit>
   );
 }
