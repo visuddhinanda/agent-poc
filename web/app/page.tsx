@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { CopilotKit, CopilotChat, useAgent, useRenderTool } from "@copilotkit/react-core/v2";
 import { Streamdown } from "streamdown";
 import { Sidebar } from "./Sidebar";
+import { CommunityList } from "./CommunityList";
 
 // runtime 地址：默认本机 3001；部署时用 NEXT_PUBLIC_RUNTIME_URL 覆盖
 const runtimeUrl =
@@ -183,6 +184,27 @@ function MarkdownRenderer(props: any) {
   );
 }
 
+function WelcomeScreen({ input }: any) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "auto" }}>
+      <div style={{ padding: "32px 16px 0", textAlign: "center" }}>
+        <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "#3a3128" }}>
+          How can I help you today?
+        </h2>
+        <p style={{ margin: "8px 0 16px", color: "#8a7a5c", fontSize: 13 }}>
+          基于三藏原文的 AI 问答，回答附经文出处，点击引用可跳转原文。
+        </p>
+      </div>
+      <div style={{ maxWidth: 760, width: "100%", margin: "0 auto", padding: "0 16px 16px" }}>
+        {input}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <CommunityList />
+      </div>
+    </div>
+  );
+}
+
 function Chat() {
   const { agent } = useAgent({ agentId: "pali_agent" });
   useRenderTool({ name: "*", render: ToolCallBubble }, []);
@@ -217,6 +239,7 @@ function Chat() {
               markdownRenderer: MarkdownRenderer,
             },
           },
+          welcomeScreen: WelcomeScreen,
         }}
       />
     </CitationsContext.Provider>
