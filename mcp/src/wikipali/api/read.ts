@@ -10,6 +10,7 @@ import type { WikiClient } from "../client.ts";
 import { READ_TIMEOUT } from "../client.ts";
 import { fmtCoord, fmtPath, parseCoord, parseCoords, textLayer } from "../coords.ts";
 import { PALI_CHANNEL, looksMachine, snippet, stripMarkup } from "../markup.ts";
+import { lookupBookByPath } from "../books.ts";
 
 type Row = Record<string, any>;
 
@@ -98,17 +99,19 @@ export async function search(
   const count = (data as Row)?.count ?? 0;
   
   const out = rows.map((r) => {
-    const coord=fmtCoord(r.book, r.paragraph);
+    const coord = fmtCoord(r.book, r.paragraph);
+    const bookRow = lookupBookByPath(r.path, r.book, r.paragraph);
     return {
-    book: r.book,
-    paragraph: r.paragraph,
-    coord: coord,
-    ref:coord,
-    link:`https://next.wikipali.org/library/tipitaka/${coord}/read?channel=translation`,
-    path: fmtPath(r.path),
-    rank: r.rank,
-    highlight: snippet(stripMarkup(r.highlight), args.width, "【"),
-  }
+      book: r.book,
+      paragraph: r.paragraph,
+      coord,
+      ref: bookRow ? `${bookRow.abbr} ${r.paragraph}` : coord,
+      abbr: bookRow?.abbr ?? "",
+      link: `https://next.wikipali.org/library/tipitaka/${coord}/read?channel=translation`,
+      path: fmtPath(r.path),
+      rank: r.rank,
+      highlight: snippet(stripMarkup(r.highlight), args.width, "【"),
+    };
   });
   return {
     count,
