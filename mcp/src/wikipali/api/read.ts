@@ -101,13 +101,17 @@ export async function search(
   const out = rows.map((r) => {
     const coord = fmtCoord(r.book, r.paragraph);
     const bookRow = lookupBookByPath(r.path, r.book, r.paragraph);
+    const last = Array.isArray(r.path) && r.path.length > 0 ? r.path[r.path.length - 1] : undefined;
+    const linkCoord = last && last.book != null && last.paragraph != null
+      ? fmtCoord(last.book, last.paragraph)
+      : coord;
     return {
       book: r.book,
       paragraph: r.paragraph,
       coord,
       ref: bookRow ? `${bookRow.abbr} ${r.paragraph}` : coord,
       abbr: bookRow?.abbr ?? "",
-      link: `https://next.wikipali.org/library/tipitaka/${coord}/read?channel=translation`,
+      link: `https://next.wikipali.org/library/tipitaka/${linkCoord}/read?channel=translation`,
       path: fmtPath(r.path),
       rank: r.rank,
       highlight: snippet(stripMarkup(r.highlight), args.width, "【"),
