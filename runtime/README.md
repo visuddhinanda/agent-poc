@@ -6,14 +6,14 @@ LangGraph agent（AG-UI 协议），并把 SSE 事件流回前端。
 ## 端口
 
 - **3001**（绑定 `0.0.0.0`，手机经局域网访问需要）
-- 依赖 backend 已在 **8000** 运行
+- 依赖 backend 已在 **8800** 运行
 
 ## 启动
 
 ```bash
 cd runtime
 npm install
-cp .env.example .env    # 可选：默认 LANGGRAPH_URL=http://localhost:8000, PORT=3001
+cp .env.example .env    # 可选：默认 LANGGRAPH_URL=http://localhost:8800, PORT=3001
 npm start               # 或 npm run dev（--watch）
 ```
 

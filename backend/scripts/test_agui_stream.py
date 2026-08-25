@@ -1,15 +1,15 @@
 """验证 AG-UI 端点：向运行中的 backend 发送 RunAgentInput，打印 SSE 事件流。
 
 用法（需先启动 backend）:
-  python scripts/test_agui_stream.py                     # 默认 http://127.0.0.1:8000
-  python scripts/test_agui_stream.py http://localhost:8000 "什么是缘起？"
+  python scripts/test_agui_stream.py                     # 默认 http://127.0.0.1:8800
+  python scripts/test_agui_stream.py http://localhost:8800 "什么是缘起？"
 """
 import json
 import sys
 
 import httpx
 
-AGENT_URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
+AGENT_URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8800"
 QUESTION = sys.argv[2] if len(sys.argv) > 2 else "什么是四圣谛？"
 
 body = {

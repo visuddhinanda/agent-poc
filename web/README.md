@@ -9,7 +9,7 @@ Next.js 15 (App Router) + CopilotKit 经典组件组合：
 ## 端口
 
 - **3000**（`npm run dev` 默认）
-- 依赖 runtime 已在 **3001** 运行（再往前是 backend **8000**）
+- 依赖 runtime 已在 **3001** 运行（再往前是 backend **8800**）
 
 ## 启动
 
@@ -26,7 +26,7 @@ npm run dev                   # http://localhost:3000
 
 ## 验证
 
-1. 确保 backend(8000) 和 runtime(3001) 已启动
+1. 确保 backend(8800) 和 runtime(3001) 已启动
 2. `npm run dev` 后打开 http://localhost:3000
 3. 输入「什么是四圣谛？」发送
 4. 预期：先看到工具调用状态（`retrieve_sutta_passage` 检索经文），

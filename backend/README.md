@@ -8,7 +8,7 @@
 
 ## 端口
 
-- **8000**（绑定 `0.0.0.0`，便于手机经局域网访问）
+- **8800**（绑定 `0.0.0.0`，便于手机经局域网访问）
 
 ## LLM 模式
 
@@ -35,14 +35,14 @@ cp .env.example .env      # 填入 DEEPSEEK_API_KEY；按需改 WIKIPALI_MCP_URL
 # 等价手动方式:
 #   python3 -m venv .venv && source .venv/bin/activate
 #   pip install -r requirements.txt
-#   uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+#   uvicorn main:app --host 0.0.0.0 --port 8800 --reload
 ```
 
 ## 验证
 
 ```bash
 # 1) 健康检查（含 MCP 连接状态）
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8800/health
 # -> {"status":"ok", ..., "mcp_connected": true}
 
 # 2) 直接验证 MCP 工具拉取 wikipali 数据（读端，无需凭据）
@@ -60,7 +60,7 @@ python scripts/test_agui_stream.py
 ```
 
 AG-UI 端点即 `POST /`（CopilotKit Runtime 的
-`LangGraphHttpAgent({ url: "http://<本机IP>:8000" })` 直接对接该地址）。
+`LangGraphHttpAgent({ url: "http://<本机IP>:8800" })` 直接对接该地址）。
 
 ## 写端（可选）
 

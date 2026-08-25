@@ -1,6 +1,6 @@
 """FastAPI 服务：以 AG-UI 协议暴露 LangGraph agent，供 CopilotKit Runtime 对接。
 
-启动: uvicorn main:app --host 0.0.0.0 --port 8000（或 ./run.sh）
+启动: uvicorn main:app --host 0.0.0.0 --port 8800（或 ./run.sh）
 Agent 端点: POST /   （AG-UI RunAgentInput -> SSE 事件流）
 """
 import asyncio
@@ -70,7 +70,7 @@ def health():
     }
 
 
-# AG-UI 端点：CopilotKit Runtime 的 LangGraphHttpAgent({ url: "http://<host>:8000" }) 对接这里
+# AG-UI 端点：CopilotKit Runtime 的 LangGraphHttpAgent({ url: "http://<host>:8800" }) 对接这里
 add_langgraph_fastapi_endpoint(
     app=app,
     agent=LangGraphAgent(
@@ -84,4 +84,4 @@ add_langgraph_fastapi_endpoint(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8800, reload=True)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dev-up.sh —— 一键拉起 WikiPali 整条链路（开发模式）
 #
-#   MCP server (3000)  ->  LangGraph backend (8000)  ->  CopilotKit runtime (3001)  ->  web (3002)
+#   MCP server (3000)  ->  LangGraph backend (8800)  ->  CopilotKit runtime (3001)  ->  web (3002)
 #
 # 用法:
 #   ./dev-up.sh              # 依次启动四个服务 + 健康检查，Ctrl+C 停止全部
@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGDIR="$ROOT/logs"
 
 MCP_PORT="${MCP_PORT:-3000}"
-BACKEND_PORT="${BACKEND_PORT:-8000}"
+BACKEND_PORT="${BACKEND_PORT:-8800}"
 RUNTIME_PORT="${RUNTIME_PORT:-3001}"
 WEB_PORT="${WEB_PORT:-3002}"
 

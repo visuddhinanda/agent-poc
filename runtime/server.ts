@@ -13,7 +13,7 @@ import { LangGraphHttpAgent } from "@copilotkit/runtime/langgraph";
 
 const PORT = Number(process.env.PORT || 3001);
 // backend 的 AG-UI 端点地址（backend 与 runtime 在同一台电脑上，用 localhost 即可）
-const LANGGRAPH_URL = process.env.LANGGRAPH_URL || "http://localhost:8000";
+const LANGGRAPH_URL = process.env.LANGGRAPH_URL || "http://localhost:8800";
 
 const runtime = new CopilotRuntime({
   agents: {
