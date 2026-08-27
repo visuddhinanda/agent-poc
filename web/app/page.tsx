@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CopilotKit, CopilotChat, useAgent, useRenderTool } from "@copilotkit/react-core/v2";
+import { CopilotKit, CopilotChat, useAgent, useRenderTool, useCopilotKit } from "@copilotkit/react-core/v2";
 import { Streamdown } from "streamdown";
 import { Sidebar } from "./Sidebar";
 import { CommunityList } from "./CommunityList";
@@ -31,9 +31,9 @@ const tagStyle: React.CSSProperties = {
   display: "inline-block",
   padding: "1px 8px",
   borderRadius: 999,
-  background: "#efe8d8",
-  border: "1px solid #d8cdb4",
-  color: "#8c3b2e",
+  background: "#e5e7eb",
+  border: "1px solid #d1d5db",
+  color: "#6b7280",
   fontSize: "0.85em",
   fontWeight: 600,
   textDecoration: "none",
@@ -96,13 +96,37 @@ const toolBubbleStyle: React.CSSProperties = {
   color: "#6b5f4e",
 };
 
+const spinnerStyle: React.CSSProperties = {
+  display: "inline-block",
+  width: 11,
+  height: 11,
+  borderRadius: "50%",
+  border: "2px solid #a06b2c",
+  borderTopColor: "transparent",
+  animation: "cpk-spin 0.8s linear infinite",
+  verticalAlign: "-1px",
+};
+
+const thinkingStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  margin: "4px 0",
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "#efe8d8",
+  border: "1px solid #d8cdb4",
+  fontSize: "0.8em",
+  color: "#6b5f4e",
+};
+
 function ToolCallBubble(props: any) {
   const { name, status } = props;
   const running = status === "inProgress" || status === "executing";
   const label = TOOL_LABELS[name] ?? name;
   return (
     <span style={toolBubbleStyle}>
-      <span>{running ? "⏳" : "✓"}</span>
+      {running ? <span style={spinnerStyle} /> : <span>✓</span>}
       <span>{label}</span>
       <span style={{ color: running ? "#a06b2c" : "#4a7c59" }}>
         {running ? "进行中…" : "完成"}
@@ -191,9 +215,26 @@ function WelcomeScreen({ input }: any) {
         <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "#3a3128" }}>
           How can I help you today?
         </h2>
-        <p style={{ margin: "8px 0 16px", color: "#8a7a5c", fontSize: 13 }}>
+        <p style={{ margin: "8px 0 12px", color: "#8a7a5c", fontSize: 13 }}>
           基于三藏原文的 AI 问答，回答附经文出处，点击引用可跳转原文。
         </p>
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            margin: "0 0 16px",
+            padding: "6px 12px",
+            borderRadius: 8,
+            border: "1px solid #d8cdb4",
+            background: "#fdfaf1",
+            color: "#6b5f4e",
+            fontSize: 12,
+          }}
+        >
+          <span>ℹ️</span>
+          <span>回答由 AI 生成，仅供参考，请以原典为准。</span>
+        </div>
       </div>
       <div style={{ maxWidth: 760, width: "100%", margin: "0 auto", padding: "0 16px 16px" }}>
         {input}
@@ -202,6 +243,31 @@ function WelcomeScreen({ input }: any) {
         <CommunityList />
       </div>
     </div>
+  );
+}
+
+/**
+ * 消息流末尾的「思考中…」指示（对齐 mobile 的 NewChatScreen 逻辑）：
+ * AI 在跑、但既没在流式输出正文、也没在跑工具时显示。挂到
+ * CopilotChat 的 messageView.cursor 槽位（默认是个脉冲小圆点，这里换成文字气泡）。
+ */
+function ThinkingCursor() {
+  const { agent } = useAgent({ agentId: "pali_agent" });
+  const { executingToolCallIds } = useCopilotKit();
+  const isRunning = agent.isRunning;
+  const messages = agent.messages ?? [];
+  const lastMsg = messages[messages.length - 1];
+  const assistantStreaming =
+    lastMsg?.role === "assistant" &&
+    typeof lastMsg.content === "string" &&
+    lastMsg.content.length > 0;
+  const runningTool = executingToolCallIds.size > 0;
+  if (!isRunning || assistantStreaming || runningTool) return <></>;
+  return (
+    <span style={thinkingStyle}>
+      <span style={spinnerStyle} />
+      <span>思考中…</span>
+    </span>
   );
 }
 
@@ -238,6 +304,7 @@ function Chat() {
             assistantMessage: {
               markdownRenderer: MarkdownRenderer,
             },
+            cursor: ThinkingCursor,
           },
           welcomeScreen: WelcomeScreen,
         }}

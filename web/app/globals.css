@@ -40,3 +40,23 @@ a {
     color-scheme: dark;
   }
 }
+
+/* 工具调用 / 骨架屏用的旋转与脉冲动画（无 Tailwind，手写 keyframes） */
+@keyframes cpk-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes cpk-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
