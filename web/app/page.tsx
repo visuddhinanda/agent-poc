@@ -329,9 +329,33 @@ function AppLayout() {
   );
 }
 
+/**
+ * 从浏览器 localStorage 读取 WikiPali 写端凭据，转成请求头。
+ *
+ * 后端无状态：写句子/术语/批注的 modelToken / userToken 只能随请求头传入。
+ * 这里约定 `localStorage["token"]` 存一个 token，两个头都用它（Authorization
+ * 用 Bearer 形式）。CopilotKit 把这些头逐请求发给 runtime，runtime 再透传给
+ * backend（backend 读头后转发给 wikipali MCP server）。未登录（无 token）时
+ * 返回空对象，即纯读模式。
+ */
+function wikipaliHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const token = window.localStorage.getItem("token");
+  if (!token) return {};
+  return {
+    Authorization: `Bearer ${token}`,
+    "X-Wikipali-User-Token": token,
+  };
+}
+
 export default function Home() {
   return (
-    <CopilotKit runtimeUrl={runtimeUrl} agent="pali_agent" useSingleEndpoint={false}>
+    <CopilotKit
+      runtimeUrl={runtimeUrl}
+      agent="pali_agent"
+      useSingleEndpoint={false}
+      headers={wikipaliHeaders}
+    >
       <AppLayout />
     </CopilotKit>
   );

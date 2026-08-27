@@ -64,5 +64,23 @@ AG-UI 端点即 `POST /`（CopilotKit Runtime 的
 
 ## 写端（可选）
 
-写句子/术语/批注需要客户端持 modelToken + userToken（见 `../mcp/README.md`），
-配到 `WIKIPALI_MODEL_TOKEN` / `WIKIPALI_USER_TOKEN` 环境变量即可；默认纯读。
+后端**无状态**：写端凭据不落盘、不来自环境变量，**只能随请求的 HTTP 头传入**。
+调用 `POST /`（AG-UI 端点）时，客户端须在请求头里携带：
+
+| 头 | 值 | 用途 |
+|---|---|---|
+| `Authorization` | `Bearer <modelToken>` | 模型身份：写句子/术语/批注时 API 据此记 `editor_uid`=模型（审计） |
+| `X-Wikipali-User-Token` | `<userToken>` | 人类授权：写句子/术语时瞬时签发 access token |
+
+后端只在单次请求内把这两个头透传给 wikipali MCP server（`mcp_tools.py` 用
+`contextvars` 暂存，再经 langchain-mcp-adapters 的 `ToolCallInterceptor` 在每次工具
+调用时注入 MCP 连接头），请求结束即丢弃，不缓存、不落盘。缺省不带这两个头即纯读
+（读端 17 个工具无需凭据）。
+
+> 不要在 `backend/.env` 里配置 `WIKIPALI_MODEL_TOKEN` / `WIKIPALI_USER_TOKEN`——
+> 这两个环境变量已移除。token 只存在于客户端，经 HTTP 头逐请求传递。
+
+两个 token 由客户端取得（`../mcp` 的 `npm run login` + `wikipali_ensure_model`，
+存在客户端侧），调用 backend 的客户端（CopilotKit Runtime 等）须把这两个头
+一并转发过来。web 前端（`../web`）从浏览器 `localStorage["token"]` 读取并作为
+这两个头发送，详见 `../web/README.md`。

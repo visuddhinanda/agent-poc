@@ -10,11 +10,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI
-from ag_ui_langgraph import LangGraphAgent, add_langgraph_fastapi_endpoint
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+
+from ag_ui.core.types import RunAgentInput
+from ag_ui.encoder import EventEncoder
+from ag_ui_langgraph import LangGraphAgent
 
 from agent import build_graph, retrieve_sutta_passage
-from mcp_tools import load_wikipali_tools
+from mcp_tools import load_wikipali_tools, set_wikipali_credentials
 
 AGENT_NAME = "pali_agent"
 
@@ -45,6 +49,14 @@ def _load_tools_and_build_graph():
 
 graph, _mcp_client = _load_tools_and_build_graph()
 
+# 单例 agent：每次请求 clone 一份（LangGraphAgent 用 self.active_run 存请求级状态，
+# 共享同一实例会串数据）。clone() 由 ag_ui_langgraph 提供。
+_agent = LangGraphAgent(
+    name=AGENT_NAME,
+    description="巴利经文 AI 问答助手（WikiPali MCP 真实语料 + DeepSeek）",
+    graph=graph,
+)
+
 
 @app.get("/info")
 def info():
@@ -70,16 +82,31 @@ def health():
     }
 
 
-# AG-UI 端点：CopilotKit Runtime 的 LangGraphHttpAgent({ url: "http://<host>:8800" }) 对接这里
-add_langgraph_fastapi_endpoint(
-    app=app,
-    agent=LangGraphAgent(
-        name=AGENT_NAME,
-        description="巴利经文 AI 问答助手（WikiPali MCP 真实语料 + DeepSeek）",
-        graph=graph,
-    ),
-    path="/",
-)
+@app.post("/")
+async def agent_endpoint(input_data: RunAgentInput, request: Request):
+    """AG-UI 端点：CopilotKit Runtime 的 LangGraphHttpAgent({ url: "http://<host>:8800" }) 对接这里。
+
+    后端无状态：写端凭据不落盘、不来自环境变量，只从当前请求头里取
+    （Authorization: Bearer <modelToken>、X-Wikipali-User-Token: <userToken>），
+    注入 contextvar 供本次请求的 MCP 工具调用透传给 wikipali MCP server。
+    """
+    accept = request.headers.get("accept")
+    encoder = EventEncoder(accept=accept)
+    request_agent = _agent.clone()
+
+    async def event_generator():
+        set_wikipali_credentials(
+            authorization=request.headers.get("Authorization"),
+            user_token=request.headers.get("X-Wikipali-User-Token"),
+        )
+        async for event in request_agent.run(input_data):
+            yield encoder.encode(event)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type=encoder.get_content_type(),
+    )
+
 
 if __name__ == "__main__":
     import uvicorn
