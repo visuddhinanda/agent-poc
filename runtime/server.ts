@@ -15,6 +15,38 @@ const PORT = Number(process.env.PORT || 3001);
 // backend 的 AG-UI 端点地址（backend 与 runtime 在同一台电脑上，用 localhost 即可）
 const LANGGRAPH_URL = process.env.LANGGRAPH_URL || "http://localhost:8800";
 
+/**
+ * 客户端中途断开（手机点「停止」/ 息屏 / 网络抖动）会让上游流中止，undici 抛
+ * `TypeError: terminated`（cause: `UND_ERR_SOCKET` / "other side closed"）。
+ * 这类错误是单个连接的正常生命周期事件，不该拖垮整个 runtime，只记录即可；
+ * 其余未捕获异常仍按致命处理退出，避免带病运行。
+ */
+function isDisconnectError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const cause = (err as { cause?: unknown }).cause as
+    | { message?: string; code?: string }
+    | undefined;
+  const text = `${err.message} ${cause?.message ?? ""} ${cause?.code ?? ""}`;
+  return /terminated|other side closed|UND_ERR_SOCKET|\baborted\b/i.test(text);
+}
+
+process.on("uncaughtException", (err) => {
+  if (isDisconnectError(err)) {
+    console.error("[runtime] 客户端断开导致的流中止（忽略）:", err.message);
+    return;
+  }
+  console.error("[runtime] uncaughtException（致命）:", err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (err) => {
+  if (isDisconnectError(err)) {
+    console.error("[runtime] 断连导致的流中止（忽略）:", (err as Error)?.message);
+    return;
+  }
+  console.error("[runtime] unhandledRejection（致命）:", err);
+  process.exit(1);
+});
+
 const runtime = new CopilotRuntime({
   agents: {
     // :agentId 即这里的 key，前端用 agent="pali_agent" 引用
