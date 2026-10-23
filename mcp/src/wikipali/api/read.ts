@@ -231,7 +231,8 @@ export async function getSentences(
       book: r.book,
       paragraph: r.paragraph,
       coord: fmtCoord(r.book, r.paragraph),
-      channel: { uid: ch.uid, name: ch.name, lang: ch.lang },
+      // v2/sentence 的行里 channel 的 uid 字段叫 id
+      channel: { uid: ch.uid ?? ch.id, name: ch.name, lang: ch.lang },
       author: editor.nickName || editor.name || "",
       word_start: r.word_start,
       word_end: r.word_end,
