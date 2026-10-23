@@ -12,12 +12,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { registerWikipaliTools } from "./wikipali/index.ts";
+import { MCP_VERSION } from "./version.ts";
 
 export function createMcpServer(): McpServer {
   const server = new McpServer(
     {
       name: "agent-poc-mcp",
-      version: "0.2.0",
+      version: MCP_VERSION,
     },
     { capabilities: { logging: {} } },
   );

@@ -8,9 +8,8 @@
 import { ApiError, WpError, explainApiError } from "../errors.ts";
 import type { WikiClient } from "../client.ts";
 import { READ_TIMEOUT } from "../client.ts";
-import { fmtCoord, fmtPath, parseCoord, parseCoords, textLayer } from "../coords.ts";
-import { PALI_CHANNEL, looksMachine, snippet, stripMarkup } from "../markup.ts";
-import { lookupBookByPath } from "../books.ts";
+import { fmtCite, fmtCoord, fmtPath, parseCoord, parseCoords, textLayer, v3Layer } from "../coords.ts";
+import { PALI_CHANNEL, PALI_CHANNEL_NAME, looksMachine, rowText, snippet, stripMarkup } from "../markup.ts";
 
 type Row = Record<string, any>;
 
@@ -25,6 +24,29 @@ async function guarded<T>(what: string, fn: () => Promise<T>): Promise<T> {
 
 function rowsOf(data: unknown): Row[] {
   return (data as Row)?.rows ?? [];
+}
+
+// 非线上站点的巴利原文 channel uid，按站点地址缓存在进程内（只是系统 channel 的 uid，不含任何凭据）
+const paliChannelCache = new Map<string, string>();
+
+/**
+ * 本站点的巴利原文 channel uid。
+ *
+ * PALI_CHANNEL 只对线上四站（共用一个库）成立；staging、开发机与自定义地址是另一个库，
+ * 系统 channel 的 uid 不同，拿线上的 uid 去查只会得到「没有内容」。所以非线上站点
+ * 按名字从 v2/channel?view=system 查一次。
+ */
+export async function paliChannel(client: WikiClient): Promise<string> {
+  if (client.bucketName === "online") return PALI_CHANNEL;
+  const cached = paliChannelCache.get(client.apiUrl);
+  if (cached) return cached;
+  const data = await guarded("查本站的巴利原文 channel", async () =>
+    client.call("GET", "v2/channel", { query: { view: "system", limit: 500 }, timeout: READ_TIMEOUT }),
+  );
+  const uid = rowsOf(data).find((r) => r.name === PALI_CHANNEL_NAME)?.uid;
+  if (!uid) throw new WpError(`该站点的系统 channel 里没有 ${PALI_CHANNEL_NAME}，取不了巴利原文。`);
+  paliChannelCache.set(client.apiUrl, uid);
+  return uid;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,33 +119,27 @@ export async function search(
   );
   const rows = rowsOf(data);
   const count = (data as Row)?.count ?? 0;
-  
-  const out = rows.map((r) => {
-    const coord = fmtCoord(r.book, r.paragraph);
-    const bookRow = lookupBookByPath(r.path, r.book, r.paragraph);
-    const last = Array.isArray(r.path) && r.path.length > 0 ? r.path[r.path.length - 1] : undefined;
-    const linkCoord = last && last.book != null && last.paragraph != null
-      ? fmtCoord(last.book, last.paragraph)
-      : coord;
-    return {
-      book: r.book,
-      paragraph: r.paragraph,
-      coord,
-      ref: bookRow ? `${bookRow.abbr} ${r.paragraph}` : coord,
-      abbr: bookRow?.abbr ?? "",
-      link: `https://next.wikipali.org/library/tipitaka/${linkCoord}/read?channel=translation`,
-      path: fmtPath(r.path),
-      rank: r.rank,
-      highlight: snippet(stripMarkup(r.highlight), args.width, "【"),
-    };
-  });
+  // ref / link 原样取服务端返回的值：citation 由 ref 合成，链接就是 link，不自己拼
+  const out = rows.map((r) => ({
+    book: r.book,
+    paragraph: r.paragraph,
+    coord: fmtCoord(r.book, r.paragraph),
+    paliTitle: r.paliTitle,
+    path: fmtPath(r.path),
+    rank: r.rank,
+    cite: fmtCite(r.book, r.paragraph, r.ref, r.link),
+    ref: r.ref ?? [],
+    link: r.link,
+    highlight: snippet(stripMarkup(r.highlight), args.width, "【"),
+  }));
   return {
     count,
     offset: args.offset,
     rows: out,
     notes: [
       `命中 ${count} 段（这里是段落数，不是词次数）。`,
-      "引用时用坐标 book-paragraph；取原文用 wikipali_get。",
+      "引用时照抄 cite（citation 与 WikiPali 链接已合成 Markdown 链接，均取自服务端的 ref / link），不要自己拼链接或编缩写。",
+      "取原文用 wikipali_get（坐标 book-paragraph）。",
       "检索前必须先展开词形（wikipali_forms 或给 lemma）——直接拿词典形会 0 条且不报错。",
     ],
   };
@@ -163,7 +179,7 @@ export async function dist(
     byLayer,
     notes: [
       `${rows.length} 部书，共 ${total} 次词命中——这里数的是词次，不是段落数（段落数看 wikipali_search 的 count）。`,
-      "引用时必须标明层次（mūla 本文 / aṭṭhakathā 义注 / ṭīkā 复注）——把义注的解释当成本文的说法是学术错误。",
+      "引用时必须标明层次（mūla 根本 / aṭṭhakathā 义注 / ṭīkā 复注）——把义注的解释当成根本的说法是学术错误。",
     ],
   };
 }
@@ -174,10 +190,11 @@ export async function dist(
 
 export async function getSentences(
   client: WikiClient,
-  args: { coords: string[]; channels?: string[]; limit: number },
+  args: { coords: string[]; channels?: string[]; limit: number; ref?: boolean },
 ): Promise<Row> {
   const grouped = parseCoords(args.coords);
-  const channels = (args.channels ?? []).length ? args.channels!.join(",") : PALI_CHANNEL;
+  // 服务端不带 channels 会 500，所以 channels 永远要给
+  const channels = (args.channels ?? []).length ? args.channels!.join(",") : await paliChannel(client);
   const collected: Row[] = [];
   for (const [book, paras] of Object.entries(grouped)) {
     const data = await guarded(`取 ${book} 的段落`, async () =>
@@ -188,9 +205,19 @@ export async function getSentences(
     );
     collected.push(...rowsOf(data));
   }
+
+  let refs: Row[] | undefined;
+  if (args.ref) {
+    refs = [];
+    for (const [book, paras] of Object.entries(grouped)) {
+      for (const para of paras) refs.push(await refEntry(client, Number(book), para));
+    }
+  }
+
   if (!collected.length) {
     return {
       rows: [],
+      ...(refs ? { refs } : {}),
       notes: [
         "这些坐标在指定 channel 下没有内容。这是「该 channel 在此处没有文本」，不是查询失败——如实报告，不要拿相邻段落或别的译本凑。",
       ],
@@ -200,6 +227,7 @@ export async function getSentences(
     const ch = r.channel ?? {};
     const editor = r.editor ?? {};
     return {
+      id: r.id,
       book: r.book,
       paragraph: r.paragraph,
       coord: fmtCoord(r.book, r.paragraph),
@@ -207,10 +235,86 @@ export async function getSentences(
       author: editor.nickName || editor.name || "",
       word_start: r.word_start,
       word_end: r.word_end,
-      text: stripMarkup(r.content),
+      content_type: r.content_type,
+      text: rowText(r),
     };
   });
-  return { rows: out, count: out.length, notes: ["共 " + out.length + " 句。"] };
+  return {
+    rows: out,
+    count: out.length,
+    ...(refs ? { refs } : {}),
+    notes: [
+      `共 ${out.length} 句。`,
+      ...(refs ? ["引用时照抄 refs[].cite；cite 为空的段取不到出处——只给坐标，不要推算页码、不要自己拼链接。"] : []),
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// ref —— 任意坐标的可追溯出处（印本页码 + 链接）
+// ---------------------------------------------------------------------------
+
+const PALI_WORD = /[a-zāīūṃṁṅñṭḍṇḷ]+/g;
+
+/**
+ * 取一段的 ref / link / path（对应插件 lookup_ref）。
+ *
+ * 服务端只有检索结果带 ref，没有「段落 → 页码」的接口。所以拿该段里最长的几个词
+ * （越长越少见），限定在它自己那本书（pcd_book_id）里检索，从结果里挑出这一段。
+ * 找不到就返回 null——不推算。
+ */
+export async function lookupRef(client: WikiClient, book: number, para: number, tries = 3): Promise<Row | null> {
+  const meta = (await fetchMeta(client, book, para)) ?? {};
+  const pcd = meta.pcd_book_id;
+  const words = [...new Set(String(meta.text ?? "").toLowerCase().match(PALI_WORD) ?? [])]
+    .sort((a, b) => b.length - a.length);
+  for (const word of words.slice(0, tries)) {
+    const query: Record<string, string | number> = { key: word, limit: 200 };
+    if (pcd) query.book = pcd;
+    let data: unknown;
+    try {
+      data = await client.call("GET", "v2/search-pali-wbw", { query, timeout: READ_TIMEOUT });
+    } catch (exc) {
+      if (exc instanceof ApiError) continue;
+      throw exc;
+    }
+    for (const r of rowsOf(data)) {
+      if (Number(r.book) === book && Number(r.paragraph) === para) {
+        return { book, paragraph: para, ref: r.ref ?? [], link: r.link, path: r.path ?? parsePath(meta.path), paliTitle: r.paliTitle };
+      }
+    }
+  }
+  return null;
+}
+
+async function refEntry(client: WikiClient, book: number, para: number): Promise<Row> {
+  const r = await lookupRef(client, book, para);
+  if (!r) return { book, paragraph: para, coord: fmtCoord(book, para), ref: null, cite: null };
+  return {
+    book,
+    paragraph: para,
+    coord: fmtCoord(book, para),
+    path: fmtPath(r.path),
+    paliTitle: r.paliTitle,
+    cite: fmtCite(book, para, r.ref, r.link),
+    ref: r.ref,
+    link: r.link,
+  };
+}
+
+export async function ref(client: WikiClient, args: { coords: string[] }): Promise<Row> {
+  const out: Row[] = [];
+  for (const [book, paras] of Object.entries(parseCoords(args.coords))) {
+    for (const para of paras) out.push(await refEntry(client, Number(book), para));
+  }
+  const missing = out.filter((r) => r.ref === null).map((r) => r.coord);
+  return {
+    rows: out,
+    notes: [
+      "引用时照抄 cite（citation 与 WikiPali 链接已合成 Markdown 链接，均取自服务端）。",
+      ...(missing.length ? [`${missing.join(", ")} 取不到出处（该段文字太少或索引里没有）。只给坐标，不要推算页码、不要自己拼链接。`] : []),
+    ],
+  };
 }
 
 export async function toc(
@@ -582,9 +686,224 @@ export async function related(client: WikiClient, args: { coord: string }): Prom
     count: rows.length,
     rows: out,
     notes: rows.length
-      ? ["引用时必须标明层次——把义注的解释当成本文的说法是学术错误。"]
+      ? ["引用时必须标明层次——把义注的解释当成根本的说法是学术错误。"]
       : ["该段没有关联段落。约 2% 的段落没有 CST 锚点，这是正常结果，不要转而搜关键词充数。"],
   };
+}
+
+// ---------------------------------------------------------------------------
+// related-cs / related-books / related-paras —— CST 锚点（v3）
+// ---------------------------------------------------------------------------
+
+const LAYER_ORDER: Record<string, number> = { mūla: 0, aṭṭhakathā: 1, ṭīkā: 2 };
+
+/** v3 tipitaka-related-paragraphs：给 CST 书名 + 段号，回各层对照段落的列表。related_cs 与 note_context 同源。 */
+export async function fetchRelatedCs(client: WikiClient, bookName: string, csPara: number): Promise<Row[]> {
+  const data = await guarded(`查 ${bookName}/${csPara} 的关联段落`, async () =>
+    client.call("GET", "v3/tipitaka-related-paragraphs", {
+      query: { book_name: bookName, cs_para: csPara },
+      v3: true,
+      timeout: READ_TIMEOUT,
+    }),
+  );
+  return Array.isArray(data) ? (data as Row[]) : [];
+}
+
+export async function relatedCs(client: WikiClient, args: { book_name: string; cs_para: number }): Promise<Row> {
+  const rows = await fetchRelatedCs(client, args.book_name, args.cs_para);
+  const out = [...rows]
+    .sort((a, b) =>
+      (LAYER_ORDER[v3Layer(a.tags)] ?? 9) - (LAYER_ORDER[v3Layer(b.tags)] ?? 9) || (Number(a.book_id) || 0) - (Number(b.book_id) || 0))
+    .map((r) => ({
+      layer: v3Layer(r.tags) || "未标层次",
+      book: r.book,
+      bookId: r.book_id,
+      title: r.title,
+      paras: r.para ?? [],
+      coords: ((r.para ?? []) as unknown[]).map((p) => fmtCoord(r.book, Number(p))),
+    }));
+  return {
+    count: out.length,
+    rows: out,
+    notes: out.length
+      ? ["按 根本 → 义注 → 复注 排序。引用时必须标明层次——把义注的解释当成根本的说法是学术错误。"]
+      : ["没有关联段落。约 2% 的段落没有 CST 锚点，这是正常结果，不是查询失败——如实报告，不要转而去注释书里搜关键词充数。"],
+  };
+}
+
+const AGGREGATE_PER_PAGE = 200; // 服务端 per_page 上限
+
+/** 分页拉全 v3/tipitaka-related-paragraphs/aggregate 系列端点：本页不足 200 即最后一页。 */
+async function fetchAggregate(client: WikiClient, path: string, what: string, query: Row = {}): Promise<Row[]> {
+  const out: Row[] = [];
+  for (let page = 1; ; page++) {
+    const data = await guarded(what, async () =>
+      client.call("GET", path, { query: { ...query, page, per_page: AGGREGATE_PER_PAGE }, v3: true, timeout: READ_TIMEOUT }),
+    );
+    const rows = Array.isArray(data) ? (data as Row[]) : [];
+    out.push(...rows);
+    if (rows.length < AGGREGATE_PER_PAGE) return out;
+  }
+}
+
+export async function relatedBooks(client: WikiClient, args: { file?: number; book?: number }): Promise<Row> {
+  if (args.file != null && args.book != null) throw new WpError("file 与 book 只能给一个。");
+  const query: Row = {};
+  if (args.file != null) query.file = args.file;
+  if (args.book != null) query.book = args.book;
+  const rows = await fetchAggregate(client, "v3/tipitaka-related-paragraphs/aggregate", "列出有 CST 锚点的书名", query);
+  const names = rows.map((r) => r.book_name).filter(Boolean);
+  return {
+    count: names.length,
+    bookNames: names,
+    notes: names.length
+      ? ["查某本书里有哪些段号用 wikipali_related_paras，再用 wikipali_related_cs 查具体对应。"]
+      : ["没有匹配。file / book 号不存在，或该 file / book 下没有带 CST 锚点的书；不给 file / book 会列出全部。"],
+  };
+}
+
+/** 把段号压缩成 1-3,5,7-9 这样的区间表示。 */
+export function csParaRanges(paras: number[]): string {
+  if (!paras.length) return "";
+  const parts: string[] = [];
+  let start = paras[0]!;
+  let prev = start;
+  for (const p of paras.slice(1)) {
+    if (p === prev + 1) {
+      prev = p;
+      continue;
+    }
+    parts.push(prev > start ? `${start}-${prev}` : `${start}`);
+    start = prev = p;
+  }
+  parts.push(prev > start ? `${start}-${prev}` : `${start}`);
+  return parts.join(",");
+}
+
+export async function relatedParas(client: WikiClient, args: { book_name: string }): Promise<Row> {
+  const rows = await fetchAggregate(
+    client,
+    `v3/tipitaka-related-paragraphs/aggregate/${args.book_name}`,
+    `列出 ${args.book_name} 的 CST 段号`,
+  );
+  const paras = [...new Set(rows.map((r) => String(r.cs_para ?? "")).filter((p) => /^\d+$/.test(p)).map(Number))]
+    .sort((a, b) => a - b);
+  return {
+    bookName: args.book_name,
+    count: paras.length,
+    ranges: csParaRanges(paras),
+    csParas: paras.map(String),
+    notes: paras.length
+      ? [`查某段的各层对应：wikipali_related_cs（book_name=${args.book_name}）。`]
+      : ["该书里没有 CST 段号（该书不存在，或没有带锚点的段落）。先用 wikipali_related_books 看有哪些 book_name。"],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// page —— 印本页码 → 坐标（只做换算，认书交给模型）
+// ---------------------------------------------------------------------------
+
+const EDITIONS: Record<string, string> = { M: "缅甸版", V: "VRI 版", P: "PTS 版", T: "泰版" };
+// M2.241 / 2.241 / 241 / 2.249-250
+const MARKER = /^(?:([MVPT])\s*)?(?:(\d+)\s*[.:]\s*)?(\d+)(?:\s*-\s*(\d+))?$/;
+
+/** `M2.241` / `2.241` / `241` / `2.249-250` → [版本, 册, 起页, 止页|undefined]。不写册号的按第 0 册算。 */
+export function parsePageMarker(raw: string): [string, number, number, number | undefined] {
+  const m = MARKER.exec(raw.trim());
+  if (!m) throw new WpError(`看不懂页码「${raw}」——写成 <册>.<页>（如 2.241）或只写页码（如 47）。`);
+  return [m[1] ?? "M", Number(m[2] ?? 0), Number(m[3]), m[4] ? Number(m[4]) : undefined];
+}
+
+export function parsePcds(raw: string): number[] {
+  const out = String(raw ?? "").split(/[,\s;]+/).filter((p) => /^\d+$/.test(p)).map(Number);
+  if (!out.length) {
+    throw new WpError("要给 pcd：模型判断出的候选著作编号，逗号分隔（pcd_book_id，与 wikipali_dist / search 的 book 同一套编号）。");
+  }
+  return out;
+}
+
+/** GET v2/nav-page/{版本}-{pcd_pcd…}-{册}-{页}。查无此页返回 null，不算错误。 */
+async function navPage(client: WikiClient, ed: string, pcds: number[], vol: number, page: number): Promise<Row | null> {
+  const ident = `${ed}-${pcds.join("_")}-${vol}-${page}`;
+  try {
+    return ((await client.call("GET", `v2/nav-page/${ident}`, { timeout: READ_TIMEOUT })) as Row) ?? null;
+  } catch (exc) {
+    if (exc instanceof ApiError && (exc.status === 404 || exc.message.toLowerCase().includes("not found"))) return null;
+    if (exc instanceof ApiError) throw explainApiError(exc, `查 ${ident}`);
+    throw exc;
+  }
+}
+
+export async function page(client: WikiClient, args: { page: string; pcd: string; text: boolean }): Promise<Row> {
+  const pcds = parsePcds(args.pcd);
+  const [ed, vol, pageNo, pageEnd] = parsePageMarker(args.page);
+  const label = `${EDITIONS[ed] ?? ed} ${vol ? `第 ${vol} 册 ` : ""}第 ${pageNo}${pageEnd ? `–${pageEnd}` : ""} 页`;
+
+  const data = await navPage(client, ed, pcds, vol, pageNo);
+  if (!data?.curr) {
+    return {
+      label,
+      found: false,
+      notes: [`候选 pcd ${pcds.join(",")} 里没有这一页。要么册号或页码不对，要么候选著作判断错了——重新判断，别拿相近的书顶上。`],
+    };
+  }
+  const curr = data.curr as Row;
+  const next = (data.next ?? {}) as Row;
+  const book = Number(curr.book);
+  const para = Number(curr.paragraph);
+  const hitPcd = curr.pcd_book_id;
+  const result: Row = {
+    label, found: true, edition: ed, vol, page: pageNo, pageEnd, pcd: hitPcd,
+    book, paragraph: para, coord: fmtCoord(book, para), wid: curr.wid, nextParagraph: next.paragraph,
+  };
+  const notes: string[] = [];
+
+  // nav-page 只回第一处。候选给了多个时再查一次余下的，撞车要说出来，不能闷着。
+  const others = pcds.filter((p) => p !== Number(hitPcd));
+  if (others.length) {
+    const rival = await navPage(client, ed, others, vol, pageNo);
+    if (rival?.curr) {
+      const r = rival.curr as Row;
+      result.ambiguous = { pcd: r.pcd_book_id, book: r.book, paragraph: r.paragraph, coord: fmtCoord(r.book, r.paragraph) };
+      notes.push(`⚠ 候选里还有一处也有这一页：pcd ${r.pcd_book_id} 的 ${fmtCoord(r.book, r.paragraph)}。候选给窄一点，或按册号收窄——每部著作各有一套自己的页码。`);
+    }
+  }
+
+  // 著作名：同一本书内起始段不大于它的最后一部（书目清单 v2/book-title）
+  const titles = await guarded("取书目清单", async () =>
+    rowsOf(await client.call("GET", "v2/book-title", { timeout: READ_TIMEOUT })),
+  );
+  const work = titles
+    .filter((w) => Number(w.book) === book && Number(w.paragraph) <= para)
+    .sort((a, b) => Number(b.paragraph) - Number(a.paragraph))[0];
+  result.toc = work?.toc ?? "";
+
+  let endPara = next.paragraph != null ? Number(next.paragraph) : para;
+  if (pageEnd) {
+    const tail = await navPage(client, ed, [Number(hitPcd)], vol, pageEnd + 1);
+    if (tail?.curr) endPara = Number((tail.curr as Row).paragraph);
+    result.paragraphEnd = endPara;
+  }
+  result.endCoord = fmtCoord(book, endPara);
+
+  if (args.text) {
+    const meta = await fetchMeta(client, book, para);
+    result.path = fmtPath(parsePath(meta?.path));
+    const paras: number[] = [];
+    for (let p = para; p <= Math.max(para, endPara); p++) paras.push(p);
+    const rows = await guarded(`取 ${book}-${para}–${endPara} 的原文`, async () =>
+      rowsOf(await client.call("GET", "v2/sentence", {
+        query: { view: "paragraph", book, para: paras.join(","), channels: await paliChannel(client), limit: 500 },
+        timeout: READ_TIMEOUT,
+      })),
+    );
+    result.rows = rows.map((r) => ({ coord: fmtCoord(r.book, r.paragraph), word_start: r.word_start, word_end: r.word_end, text: rowText(r) }));
+    notes.push("末段与下一页共享——本页在其中某处结束，不是整段都属于这一页。");
+    if (!rows.length) notes.push("该区间取不到巴利原文。");
+  } else {
+    notes.push(`本页止于 ${fmtCoord(book, endPara)}（与下一页共享这一段）。取原文用 wikipali_get，或本工具加 text=true。`);
+  }
+  return { ...result, notes };
 }
 
 // ---------------------------------------------------------------------------

@@ -14,23 +14,29 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpServer } from "../src/server.ts";
 
 const EXPECTED_TOOLS = [
-  // 读端（17）
+  // 读端（22）
   "wikipali_forms", "wikipali_word", "wikipali_count", "wikipali_terms", "wikipali_books",
   "wikipali_toc", "wikipali_paras", "wikipali_chapter", "wikipali_chapter_fetch", "wikipali_get",
-  "wikipali_versions", "wikipali_search", "wikipali_dist", "wikipali_related",
+  "wikipali_ref", "wikipali_versions", "wikipali_search", "wikipali_dist", "wikipali_related",
+  "wikipali_related_cs", "wikipali_related_books", "wikipali_related_paras", "wikipali_page",
   "wikipali_articles", "wikipali_article", "wikipali_anthology",
   // 站点/凭据（2）
   "wikipali_endpoint", "wikipali_whoami",
   // 凭据与 token（4）
   "wikipali_ensure_model", "wikipali_revoke", "wikipali_channels", "wikipali_grant",
-  // 写端（12）
+  // 写端：句子 / 术语（7）
   "wikipali_my_terms",
   "wikipali_write_preview", "wikipali_write_commit",
   "wikipali_term_add_preview", "wikipali_term_add_commit",
   "wikipali_term_edit_preview", "wikipali_term_edit_commit",
-  "wikipali_discuss",
+  // 批注 v3（10）
+  "wikipali_discuss", "wikipali_discuss_range",
   "wikipali_discuss_add_preview", "wikipali_discuss_add_commit",
   "wikipali_discuss_reply_preview", "wikipali_discuss_reply_commit",
+  "wikipali_discuss_edit_preview", "wikipali_discuss_edit_commit",
+  "wikipali_discuss_delete_preview", "wikipali_discuss_delete_commit",
+  // 注释书对应（3）
+  "wikipali_note_context", "wikipali_note_push_preview", "wikipali_note_push_commit",
 ];
 
 describe("WikiPali MCP server", () => {
@@ -77,6 +83,18 @@ describe("WikiPali MCP server", () => {
     const result = await client.callTool({ name: "wikipali_channels", arguments: {} });
     assert.equal(result.isError, true);
     assert.match(result.content[0]!.text as string, /缺少凭据|Authorization/);
+  });
+
+  it("批注写工具缺 X-Wikipali-User-Token 时在触网前报错", async () => {
+    const result = await client.callTool({ name: "wikipali_discuss_add_preview", arguments: { coord: "1-2", content: "x" } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0]!.text as string, /缺少凭据|缺少 userToken/);
+  });
+
+  it("wikipali_page 对看不懂的页码在触网前报错", async () => {
+    const result = await client.callTool({ name: "wikipali_page", arguments: { page: "x.y", pcd: "70" } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0]!.text as string, /看不懂页码/);
   });
 
   it("读类工具无需凭据，仍可正常进入业务校验", async () => {

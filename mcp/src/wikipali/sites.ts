@@ -4,6 +4,7 @@
  * 四个线上地址共享同一个数据库和同一把 jwt 密钥，凭据完全通用；
  * .org / .cc 是地区可达性，www / next 是代码版本（不是数据环境）。
  * staging 与开发机 local 各是另一个库、另一把密钥，自成一桶，且绝不参与自动 fallback。
+ * staging 的 .org / .cc 两个域名是同一个库，共用 staging 桶。
  */
 
 import { WpError } from "./errors.ts";
@@ -22,12 +23,18 @@ export const SITES: SiteDef[] = [
   { key: "next", url: "https://next.wikipali.org/api", version: "最新版", domain: ".org", bucket: "online" },
   { key: "next.cc", url: "https://next.wikipali.cc/api", version: "最新版", domain: ".cc", bucket: "online" },
   { key: "staging", url: "https://staging.wikipali.org/api", version: "预发布", domain: "独立库", bucket: "staging" },
+  { key: "staging.cc", url: "https://staging.wikipali.cc/api", version: "预发布", domain: "独立库 · .cc", bucket: "staging" },
   { key: "local", url: "http://127.0.0.1:8000/api", version: "开发机", domain: "独立库", bucket: "local" },
 ];
 
 export const ONLINE_URLS: string[] = SITES.filter((s) => s.bucket === "online").map((s) => s.url);
 export const LOCAL_URL: string = SITES.find((s) => s.key === "local")!.url;
 export const DEFAULT_API_URL: string = SITES[0]!.url;
+
+/** 站点所属的桶：online / staging / local；自定义地址自成一桶（以 url 为名）。 */
+export function bucketNameFor(apiUrl: string): string {
+  return SITES.find((s) => s.url === apiUrl)?.bucket ?? apiUrl;
+}
 
 export function normalizeApiUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, "");

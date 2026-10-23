@@ -79,13 +79,18 @@ export function requireUserToken(extra: any): string {
   );
 }
 
-/** 写句子/术语专用：严格要 X-Wikipali-User-Token（不回退到 Authorization，避免误把 modelToken 当 userToken 用）。 */
+/** 可选的 userToken（只认 X-Wikipali-User-Token 头）：批注读工具按名字解析 channel 时才用得上。 */
+export function optionalUserToken(extra: any): string | undefined {
+  return headerValue(extra, "x-wikipali-user-token");
+}
+
+/** 写句子/术语/批注专用：严格要 X-Wikipali-User-Token（不回退到 Authorization，避免误把 modelToken 当 userToken 用）。 */
 export function requireUserTokenHeader(extra: any): string {
   const token = headerValue(extra, "x-wikipali-user-token");
   if (!token) {
     throw new WpError(
-      "缺少 userToken：写句子/术语需要在 HTTP 请求里额外带 X-Wikipali-User-Token: <userToken>，\n" +
-        "server 用它瞬时签发 channel access token（Authorization 里是 modelToken，负责署名审计）。",
+      "缺少 userToken：写句子/术语/批注需要在 HTTP 请求里额外带 X-Wikipali-User-Token: <userToken>，\n" +
+        "server 用它瞬时签发 channel access token 或批注写入授权（Authorization 里是 modelToken，负责署名审计）。",
     );
   }
   return token;

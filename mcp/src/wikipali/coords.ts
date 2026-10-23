@@ -35,6 +35,33 @@ export function fmtCoord(book: number | undefined, paragraph: number | undefined
   return `${book}-${paragraph}`;
 }
 
+// 检索结果 ref[].type → 显示名；WP 另行处理（它的 page 就是段落号）
+const REF_EDITIONS: [string, string][] = [["My", "缅"], ["PTS", "PTS"], ["VRI", "VRI"], ["Thai", "泰"]];
+
+/**
+ * 出处 = citation + WikiPali 链接，合成一个 Markdown 链接（对应插件 coords.fmt_cite）：
+ *
+ *     [dī.ni.ṭī.2. 186-1411; 缅 dī-ṭī 2 p.340; PTS DnT II p.429](https://…/read#1411)
+ *
+ * citation 与链接**全部取自服务端**（检索结果的 ref / link）：WP 缩写 + 坐标，再加该段真有的
+ * 印本页码。没有链接时只给 citation 文字——不自己拼链接、不自己编缩写。
+ */
+export function fmtCite(book: unknown, paragraph: unknown, refs: unknown, link?: unknown): string {
+  const byType = new Map<string, Record<string, any>>();
+  for (const r of Array.isArray(refs) ? refs : []) {
+    if (typeof r === "object" && r !== null) byType.set(String((r as Record<string, any>).type), r as Record<string, any>);
+  }
+  const wp = byType.get("WP");
+  const head = wp?.title ? `${wp.title} ` : "";
+  const parts = [`${head}${fmtCoord(book as number, paragraph as number)}`];
+  for (const [key, label] of REF_EDITIONS) {
+    const r = byType.get(key);
+    if (r && r.page != null) parts.push(`${label}${r.title ? ` ${r.title}` : ""} p.${r.page}`);
+  }
+  const text = parts.join("; ");
+  return typeof link === "string" && link ? `[${text}](${link})` : text;
+}
+
 export interface PathItem {
   book?: number | string;
   paragraph?: number | string;
@@ -58,7 +85,16 @@ export interface TagItem {
   name?: string;
 }
 
-/** 按 tags 判断文献层次：本文 / 义注 / 复注。 */
+/** v3 的 tags 是字符串数组（不是 v2 的 {id,name,color} 对象数组）；复注类都并入 ṭīkā。 */
+export function v3Layer(tags: unknown): "" | "mūla" | "aṭṭhakathā" | "ṭīkā" {
+  const names = new Set((Array.isArray(tags) ? tags : []).map(String));
+  if (["ṭīkā", "mūlaṭīkā", "anuṭīkā"].some((t) => names.has(t))) return "ṭīkā";
+  if (names.has("aṭṭhakathā")) return "aṭṭhakathā";
+  if (names.has("mūla") || names.has("pāḷi")) return "mūla";
+  return "";
+}
+
+/** 按 tags 判断文献层次：根本 / 义注 / 复注。 */
 export function textLayer(tags: unknown): "" | "mūla" | "aṭṭhakathā" | "ṭīkā" {
   const names = new Set(
     (Array.isArray(tags) ? tags : [])

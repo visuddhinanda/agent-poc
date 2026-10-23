@@ -7,18 +7,31 @@
 
 import { WpError } from "./errors.ts";
 import { ApiError } from "./errors.ts";
-import { DEFAULT_API_URL, ONLINE_URLS, SITES, siteLabel } from "./sites.ts";
+import { DEFAULT_API_URL, ONLINE_URLS, SITES, bucketNameFor, siteLabel } from "./sites.ts";
+import { MCP_VERSION } from "../version.ts";
 
 export const DEFAULT_TIMEOUT = 30_000;
 export const WRITE_TIMEOUT = 120_000;
 export const READ_TIMEOUT = 60_000;
 export const DEFAULT_BATCH = 50;
 
+// 客户端身份：标准「软件/版本」格式，与插件的 wikipali-plugins/<版本> 对应
+export const USER_AGENT = `wikipali-mcp/${MCP_VERSION}`;
+
 export interface CallOptions {
   token?: string;
   body?: unknown;
   query?: Record<string, string | number | undefined>;
   timeout?: number;
+  /**
+   * v3 原生 Resource 信封：没有 ok 字段，成败只看 HTTP 状态码，返回 payload.data；
+   * v2 仍按 {ok, message, data} 判 ok。
+   */
+  v3?: boolean;
+  /** 只对 v3：返回整个响应体（列表要读 meta 分页时用）。 */
+  envelope?: boolean;
+  /** 额外请求头，如 agent 写入授权 X-Agent-Grant。 */
+  headers?: Record<string, string>;
 }
 
 /** 路径里可能有巴利词（parivāsa），先按段百分号编码，保留 "/"。 */
@@ -46,9 +59,12 @@ async function httpJson(
     if (qs) url += `?${qs}`;
   }
 
+  // 界面是中文；v3 按 Accept-Language 返回错误文案（v2 不看这个头）
   const headers: Record<string, string> = {
     Accept: "application/json",
-    "User-Agent": "wikipali-mcp",
+    "Accept-Language": "zh-Hans",
+    "User-Agent": USER_AGENT,
+    ...(opts.headers ?? {}),
   };
   let data: string | undefined;
   if (opts.body !== undefined) {
@@ -78,16 +94,19 @@ async function httpJson(
   const status = resp.status;
 
   if (!resp.ok) {
-    const message =
-      typeof payload === "object" && payload !== null && "message" in payload
-        ? String((payload as Record<string, unknown>).message)
-        : `HTTP ${status}`;
+    let message = "";
+    if (typeof payload === "object" && payload !== null) {
+      // v2 用 message，v3 Problem 用 detail（更具体），退 title（通用）
+      const p = payload as Record<string, unknown>;
+      message = String(p.message || p.detail || p.title || "");
+    }
     throw new ApiError(status, message || `HTTP ${status}`, url, payload || raw);
   }
   if (typeof payload !== "object" || payload === null) {
     throw new ApiError(status, `响应不是 JSON：${raw.slice(0, 200)}`, url, raw);
   }
   const obj = payload as Record<string, unknown>;
+  if (opts.v3) return opts.envelope ? obj : obj.data;
   if (obj.ok !== true) {
     throw new ApiError(status, typeof obj.message === "string" ? obj.message : "请求失败", url, payload);
   }
@@ -138,6 +157,11 @@ export class WikiClient {
       }
     }
     throw new WpError(`所有可用站点都连不上，最后一次错误：${String(last)}`);
+  }
+
+  /** 站点所属的桶（online / staging / local / 自定义 url）。线上四站共享同一个库。 */
+  get bucketName(): string {
+    return bucketNameFor(this.apiUrl);
   }
 
   apiNote(): string {

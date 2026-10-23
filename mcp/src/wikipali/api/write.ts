@@ -9,14 +9,14 @@
  *   userToken（人类，客户端持有）→ 查/建 ai-model、签 access token、列 channel
  *   modelToken（模型）→ 写句子/术语/批注时的 Authorization
  *   accessToken（channel 编辑权）→ 写句子/术语时的 body 字段
+ *
+ * 批注（v3 discussions，写入凭人类授权 agent-grant）在 api/discuss.ts。
  */
 
 import { ApiError, WpError, explainApiError } from "../errors.ts";
-import type { CallOptions, WikiClient } from "../client.ts";
+import type { WikiClient } from "../client.ts";
 import { WRITE_TIMEOUT, READ_TIMEOUT } from "../client.ts";
-import { fmtCoord, parseCoord } from "../coords.ts";
 import { fmtTs, tokenExpiry } from "../creds.ts";
-import { PALI_CHANNEL, stripMarkup } from "../markup.ts";
 
 type Row = Record<string, any>;
 
@@ -504,152 +504,4 @@ export async function termEdit(
     guid: saved.guid, word: saved.word, meaning: saved.meaning,
     editor: saved.editor?.nickName || saved.editor?.name,
   };
-}
-
-// ---------------------------------------------------------------------------
-// 批注（discussion）
-// ---------------------------------------------------------------------------
-
-const RES_TYPE = "sentence";
-const DISCUSS_TYPE = "discussion";
-
-async function callAsModel(
-  client: WikiClient,
-  modelToken: string,
-  method: string,
-  path: string,
-  what: string,
-  opts: { body?: Row; query?: Row } = {},
-): Promise<Row> {
-  const callOpts: CallOptions = { token: modelToken, timeout: READ_TIMEOUT };
-  if (opts.body !== undefined) callOpts.body = opts.body;
-  if (opts.query !== undefined) callOpts.query = opts.query;
-  try {
-    return (await client.call(method, path, callOpts)) as Row;
-  } catch (exc) {
-    if (exc instanceof ApiError && exc.status === 401) {
-      throw new WpError(`${what}：401 模型 token 失效或被撤销。请重新运行 wikipali_ensure_model 更新客户端侧的 modelToken。`);
-    }
-    throw explainApiError(exc as ApiError, what);
-  }
-}
-
-async function resolveSentence(
-  client: WikiClient,
-  args: { coord?: string; sent?: string; channel?: string; words?: string },
-): Promise<{ uid: string; desc: string }> {
-  if (args.sent) return { uid: args.sent, desc: `句子 ${args.sent}` };
-  if (!args.coord) throw new WpError("要么给坐标（如 216-35），要么用 sent 直接指定句子 uid。");
-
-  const [book, para] = parseCoord(args.coord);
-  // 讨论的 channel 缺省为巴利原文；要挂到某译本就给该 channel 的 uid（不做名字解析，避免需要 userToken）
-  const channelUid = args.channel ?? PALI_CHANNEL;
-  const channelName = args.channel ?? "巴利原文";
-  const data = await guarded(`取 ${args.coord} 的句子`, async () =>
-    client.call("GET", "v2/sentence", {
-      query: { view: "paragraph", book: String(book), para: String(para), channels: channelUid, limit: 200 },
-      timeout: READ_TIMEOUT,
-    }),
-  );
-  let rows: Row[] = rowsOf(data);
-  if (!rows.length) {
-    throw new WpError(`${fmtCoord(book, para)} 在该 channel 下没有句子，无法批注——换个 channel，或先确认坐标。`);
-  }
-  if (args.words) {
-    const [start, end] = args.words.split("-").map(Number);
-    rows = rows.filter((r) => Number(r.word_start ?? -1) === start && Number(r.word_end ?? -1) === end);
-    if (!rows.length) throw new WpError(`${fmtCoord(book, para)} 下没有 [${args.words}] 这一句。`);
-  }
-  if (rows.length > 1) {
-    const lines = rows.map((r) => `--words ${r.word_start}-${r.word_end}  ${stripMarkup(r.content).slice(0, 60)}`);
-    throw new WpError(`${fmtCoord(book, para)} 有 ${rows.length} 句，指明是哪一句再批注（或用 sent 直接给 uid）：\n${lines.join("\n")}`);
-  }
-  const row = rows[0]!;
-  const ch = row.channel ?? {};
-  const desc = `${fmtCoord(book, para)} [${row.word_start}-${row.word_end}] ${ch.name || channelName}\n${stripMarkup(row.content).slice(0, 100)}`;
-  return { uid: row.id, desc };
-}
-
-export async function discussList(
-  client: WikiClient,
-  modelToken: string,
-  args: { coord?: string; sent?: string; channel?: string; words?: string; status: string; limit: number; offset: number },
-): Promise<Row> {
-  const { uid, desc } = await resolveSentence(client, args);
-  const data = await callAsModel(client, modelToken, "GET", "v2/discussion", "列出批注", {
-    query: { view: "question", res_type: RES_TYPE, id: uid, type: DISCUSS_TYPE, status: args.status, limit: args.limit, offset: args.offset },
-  });
-  const rows = rowsOf(data);
-  for (const row of rows) {
-    if (row.children_count) {
-      const replies = await callAsModel(client, modelToken, "GET", "v2/discussion", "取批注的回复", {
-        query: { view: "answer", id: row.id, status: "active", limit: 200 },
-      });
-      row.replies = replies.rows ?? [];
-    } else {
-      row.replies = [];
-    }
-  }
-  const who = (r: Row) => {
-    const e = r.editor ?? {};
-    const n = e.nickName || e.userName || "(未知)";
-    return (e.roles ?? []).includes("ai") ? `${n}（AI）` : n;
-  };
-  return {
-    target: desc,
-    sentenceUid: uid,
-    active: data.active ?? 0,
-    close: data.close ?? 0,
-    topics: rows.map((r) => ({
-      id: r.id, title: r.title, author: who(r), status: r.status,
-      createdAt: String(r.created_at ?? "").slice(0, 10), content: r.content,
-      replies: (r.replies ?? []).map((reply: Row) => ({
-        author: who(reply), createdAt: String(reply.created_at ?? "").slice(0, 10), content: reply.content,
-      })),
-    })),
-    note: "回复某条用 wikipali_discuss_reply，参数 id 用 topics[].id。",
-  };
-}
-
-async function readContent(args: { content?: string; content_file?: string }): Promise<string> {
-  if (args.content_file) {
-    const { readFile } = await import("node:fs/promises");
-    try {
-      return await readFile(args.content_file, "utf-8");
-    } catch (exc) {
-      throw new WpError(`读不了内容文件：${String(exc)}`);
-    }
-  }
-  const content = args.content ?? "";
-  if (!content.trim()) throw new WpError("批注内容为空。给 content 字段。");
-  return content;
-}
-
-export async function discussAdd(
-  client: WikiClient,
-  modelToken: string,
-  args: { coord?: string; sent?: string; channel?: string; words?: string; title: string; content?: string; content_file?: string; contentType: string; notify: boolean; dryRun: boolean },
-): Promise<Row> {
-  const { uid, desc } = await resolveSentence(client, args);
-  const content = await readContent(args);
-  const body: Row = { res_id: uid, res_type: RES_TYPE, type: DISCUSS_TYPE, title: args.title, content, content_type: args.contentType, notification: args.notify };
-  const preview = { api: client.apiNote(), target: desc, sentenceUid: uid, title: args.title, content, notify: args.notify };
-  if (args.dryRun) return { dryRun: true, preview };
-
-  const saved = await callAsModel(client, modelToken, "POST", "v2/discussion", "新建批注", { body });
-  return { dryRun: false, preview, id: saved.id, editor: saved.editor?.nickName || saved.editor?.userName };
-}
-
-export async function discussReply(
-  client: WikiClient,
-  modelToken: string,
-  args: { id: string; content?: string; content_file?: string; contentType: string; notify: boolean; dryRun: boolean },
-): Promise<Row> {
-  const content = await readContent(args);
-  const body: Row = { parent: args.id, content, content_type: args.contentType, notification: args.notify };
-  const preview = { api: client.apiNote(), replyTo: args.id, content, notify: args.notify };
-  if (args.dryRun) return { dryRun: true, preview };
-
-  const saved = await callAsModel(client, modelToken, "POST", "v2/discussion", "回复批注", { body });
-  return { dryRun: false, preview, id: saved.id, editor: saved.editor?.nickName || saved.editor?.userName };
 }
