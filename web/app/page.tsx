@@ -12,10 +12,19 @@ const runtimeUrl =
   process.env.NEXT_PUBLIC_RUNTIME_URL || "http://localhost:3001/api/copilotkit";
 
 interface Citation {
-  ref: string;
+  /** mock 检索是出处字符串；wikipali_search 是服务端原样的印本页码数组，展示用 cite */
+  ref: unknown;
+  /** wikipali_search 的出处：「[citation](link)」Markdown 链接，citation 与 link 均取自服务端 */
+  cite?: string;
   passageId: string;
   link: string;
   highlight: string;
+}
+
+/** popover 标题：优先 cite 的 citation 文字，其次 mock 的 ref 字符串 */
+function citationLabel(c: Citation): string {
+  if (c.cite) return c.cite.match(/^\[(.*)\]\(.*\)$/)?.[1] ?? c.cite;
+  return typeof c.ref === "string" ? c.ref : c.passageId;
 }
 
 /** 从 /library/tipitaka/188-459/... 提取 passageId */
@@ -152,7 +161,8 @@ function CitationLink(props: any) {
     );
   }
 
-  const citation = citations.get(passageId);
+  // 服务端 link 指向章节起点（…/203-1677/read#1702），按完整 href 精确匹配，再退回坐标
+  const citation = citations.get(href) ?? citations.get(passageId);
 
   const handleMouseEnter = () => {
     const el = tagRef.current;
@@ -188,7 +198,7 @@ function CitationLink(props: any) {
         ? createPortal(
             <span style={{ ...popoverStyle, top: pos.top, left: pos.left }}>
               <span style={{ display: "block", fontWeight: 700, color: "#a06b2c", marginBottom: 6 }}>
-                📖 {citation.ref}
+                📖 {citationLabel(citation)}
               </span>
               <span style={{ display: "block", color: "#6b5f4e" }}>{citation.highlight}</span>
             </span>,
@@ -287,7 +297,10 @@ function Chat() {
         for (const c of rows) {
           const key = c?.passageId ?? c?.coord;
           // 只存带 link 的 citation（wikipali_search 的结果），忽略 get/dist/forms 等其他工具结果
-          if (key && c?.link) citations.set(key, c);
+          if (key && c?.link) {
+            citations.set(key, c);
+            citations.set(c.link, c);
+          }
         }
       } catch {
         // 非 JSON 工具结果忽略
