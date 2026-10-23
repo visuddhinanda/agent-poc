@@ -63,7 +63,29 @@ const listener = createCopilotNodeListener({
   cors: true, // 允许 web(3000)/mobile(Expo) 跨域访问
 });
 
-createServer(listener).listen(PORT, "0.0.0.0", () => {
+/**
+ * 请求日志：每个请求一行（方法、路径、状态、耗时、是否被客户端中途断开）。
+ * SSE 流要等流结束才算完，所以挂在 res 的 finish/close 上。RUNTIME_LOG=0 关闭。
+ */
+const logRequests = process.env.RUNTIME_LOG !== "0";
+const server = createServer((req, res) => {
+  if (logRequests) {
+    const started = Date.now();
+    let done = false;
+    const finish = (how: string) => {
+      if (done) return;
+      done = true;
+      console.log(
+        `${new Date().toISOString()} [http] ${req.method} ${req.url} status=${res.statusCode} ms=${Date.now() - started} ${how}`,
+      );
+    };
+    res.on("finish", () => finish("ok"));
+    res.on("close", () => finish(res.writableFinished ? "ok" : "client-closed"));
+  }
+  return listener(req, res);
+});
+
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`[runtime] CopilotKit Runtime: http://0.0.0.0:${PORT}/api/copilotkit`);
   console.log(`[runtime] LangGraph backend (AG-UI): ${LANGGRAPH_URL}`);
 });

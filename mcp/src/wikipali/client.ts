@@ -9,6 +9,7 @@ import { WpError } from "./errors.ts";
 import { ApiError } from "./errors.ts";
 import { DEFAULT_API_URL, ONLINE_URLS, SITES, bucketNameFor, siteLabel } from "./sites.ts";
 import { MCP_VERSION } from "../version.ts";
+import { log } from "../log.ts";
 
 export const DEFAULT_TIMEOUT = 30_000;
 export const WRITE_TIMEOUT = 120_000;
@@ -77,14 +78,19 @@ async function httpJson(
   const timer = setTimeout(() => controller.abort(), opts.timeout ?? DEFAULT_TIMEOUT);
   const init: RequestInit = { method, headers, signal: controller.signal };
   if (data !== undefined) init.body = data;
+  const started = Date.now();
   let resp: Response;
   try {
     resp = await fetch(url, init);
+  } catch (exc) {
+    log("http", { method, path, ms: Date.now() - started, error: String(exc) });
+    throw exc;
   } finally {
     clearTimeout(timer);
   }
 
   const raw = await resp.text();
+  log("http", { method, path, query: query ? new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString() : undefined, status: resp.status, ms: Date.now() - started, bytes: raw.length });
   let payload: unknown;
   try {
     payload = JSON.parse(raw);

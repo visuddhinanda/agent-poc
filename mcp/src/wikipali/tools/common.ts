@@ -9,6 +9,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod/v4";
 
 import { WpError } from "../errors.ts";
+import { brief, log, withRequestId } from "../../log.ts";
 
 export interface JsonToolOpts {
   title?: string;
@@ -31,11 +32,19 @@ export function registerJsonTool(
       inputSchema: opts.inputSchema,
       ...(opts.title !== undefined ? { title: opts.title } : {}),
     },
-    async (args: any, extra: any) => {
-      const result = await handler(args, extra);
-      const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-      return { content: [{ type: "text" as const, text }] };
-    },
+    async (args: any, extra: any) =>
+      withRequestId(headerValue(extra, "x-request-id"), async () => {
+        const started = Date.now();
+        try {
+          const result = await handler(args, extra);
+          const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          log("tool", { name, ms: Date.now() - started, chars: text.length, args: brief(args, 300) });
+          return { content: [{ type: "text" as const, text }] };
+        } catch (exc) {
+          log("tool", { name, ms: Date.now() - started, error: brief(String(exc), 300), args: brief(args, 300) });
+          throw exc;
+        }
+      }),
   );
 }
 

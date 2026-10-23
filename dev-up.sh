@@ -100,7 +100,8 @@ if port_in_use "$MCP_PORT"; then
 else
   cd "$ROOT/mcp" || exit 1
   if [ ! -d node_modules ]; then info "npm install ..."; npm install --cache "$ROOT/.npm-cache" >/dev/null; fi
-  if [ ! -f dist/index.js ]; then info "npm run build ..."; npm run build >/dev/null; fi
+  # 每次都重新编译：只在 dist 缺失时编译，会让改过的源码悄悄跑旧版本
+  info "npm run build ..."; npm run build >/dev/null || { log "  ✗ mcp 编译失败" >&2; FAIL=1; }
   (WIKIPALI_API_URL="$MCP_API_URL" PORT="$MCP_PORT" exec node dist/index.js > "$LOGDIR/mcp.log" 2>&1) &
   _pid=$!; PIDS+=("$_pid"); record_pid mcp "$_pid"
 fi
@@ -117,7 +118,7 @@ else
     python3 -m venv .venv
     .venv/bin/pip install -q -r requirements.txt
   fi
-  (.venv/bin/uvicorn main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "$LOGDIR/backend.log" 2>&1) &
+  (PYTHONUNBUFFERED=1 .venv/bin/uvicorn main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "$LOGDIR/backend.log" 2>&1) &
   _pid=$!; PIDS+=("$_pid"); record_pid backend "$_pid"
 fi
 wait_for backend "http_code http://127.0.0.1:${BACKEND_PORT}/health | grep -q 200" 40 || FAIL=1

@@ -11,6 +11,8 @@ from contextvars import ContextVar
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from obs import current_run
+
 MCP_URL = os.getenv("WIKIPALI_MCP_URL", "http://127.0.0.1:3000/mcp")
 
 # 后端 -> wikipali MCP server 需要透传的两个凭据头
@@ -49,9 +51,9 @@ class _WikipaliCredentialInterceptor:
     """
 
     async def __call__(self, request, handler):
-        creds = _wikipali_credentials.get()
-        if creds:
-            request = request.override(headers={**creds})
+        # X-Request-Id：本次 agent 运行的 run_id，MCP 日志据此与 backend 日志对上
+        headers = {**_wikipali_credentials.get(), "X-Request-Id": current_run().rid}
+        request = request.override(headers=headers)
         return await handler(request)
 
 

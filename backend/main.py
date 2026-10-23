@@ -19,6 +19,7 @@ from ag_ui_langgraph import LangGraphAgent
 
 from agent import build_graph, retrieve_sutta_passage
 from mcp_tools import load_wikipali_tools, set_wikipali_credentials
+from obs import ObsCallback, brief, end_run, log, start_run
 
 AGENT_NAME = "pali_agent"
 
@@ -55,6 +56,10 @@ _agent = LangGraphAgent(
     name=AGENT_NAME,
     description="巴利经文 AI 问答助手（WikiPali MCP 真实语料 + DeepSeek）",
     graph=graph,
+    # ObsCallback：每次 LLM / 工具调用一行日志；recursion_limit 是工具预算之外的兜底
+    config={"callbacks": [ObsCallback()], "recursion_limit": 40},
+    # RAW 事件把 LangGraph 原始事件整份再发一遍，客户端用不上，只会让 SSE 体积翻倍
+    emit_raw_events=False,
 )
 
 
@@ -99,8 +104,27 @@ async def agent_endpoint(input_data: RunAgentInput, request: Request):
             authorization=request.headers.get("Authorization"),
             user_token=request.headers.get("X-Wikipali-User-Token"),
         )
-        async for event in request_agent.run(input_data):
-            yield encoder.encode(event)
+        start_run(input_data.run_id, input_data.thread_id)
+        last_user = next(
+            (m for m in reversed(input_data.messages or []) if getattr(m, "role", None) == "user"),
+            None,
+        )
+        log(
+            "start",
+            thread=input_data.thread_id,
+            msgs=len(input_data.messages or []),
+            state=brief(input_data.state or {}, 400),
+            q=brief(getattr(last_user, "content", "") or "", 120),
+        )
+        error = None
+        try:
+            async for event in request_agent.run(input_data):
+                yield encoder.encode(event)
+        except BaseException as exc:  # 含客户端断连（CancelledError），汇总行照样要打
+            error = exc
+            raise
+        finally:
+            end_run(error)
 
     return StreamingResponse(
         event_generator(),

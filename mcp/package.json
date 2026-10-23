@@ -10,7 +10,7 @@
     "login": "tsx src/login.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/**/*.test.ts"
+    "test": "MCP_LOG=0 tsx --test test/**/*.test.ts"
   },
   "keywords": [],
   "author": "",
