@@ -17,7 +17,10 @@ from ag_ui.core.types import RunAgentInput
 from ag_ui.encoder import EventEncoder
 from ag_ui_langgraph import LangGraphAgent
 
+from langgraph.checkpoint.memory import MemorySaver
+
 from agent import build_graph, retrieve_sutta_passage
+from routing import build_routed_graph
 from mcp_tools import load_wikipali_tools, set_wikipali_credentials
 from obs import ObsCallback, brief, end_run, log, start_run
 
@@ -42,6 +45,11 @@ def _load_tools_and_build_graph():
     try:
         mcp_client, wikipali_tools = asyncio.run(load_wikipali_tools())
         print(f"[mcp] 已连接 MCP server，加载 {len(wikipali_tools)} 个 wikipali 工具")
+        if os.getenv("DEEPSEEK_API_KEY") and os.getenv("AGENT_GRAPH", "routed") == "routed":
+            # 按问题类型分路径（docs/agent-routing.md）；AGENT_GRAPH=react 切回旧的不设限循环做对照
+            print("[graph] routed：plan → passage / term / question → answer")
+            return build_routed_graph(wikipali_tools, checkpointer=MemorySaver()), mcp_client
+        print("[graph] react：chatbot ⇄ tools")
         return build_graph(tools=wikipali_tools), mcp_client
     except Exception as exc:  # MCP 不可用时降级，保证服务仍能起
         print(f"[warn] 无法连接 MCP server（{exc}），回退到 mock 经文检索工具")
