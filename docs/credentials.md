@@ -8,17 +8,26 @@
 
 | 头 | 值 | 用途 |
 |---|---|---|
-| `Authorization` | `Bearer <modelToken>` | **模型身份**：写句子/术语/批注时 WikiPali API 据此记 `editor_uid` = 模型（审计） |
-| `X-Wikipali-User-Token` | `<userToken>` | **人类授权**：列 channel / 建模型 / 瞬时签发 access token |
+| `Authorization` | `Bearer <modelToken>` | **模型身份**：写句子/术语时 WikiPali API 据此记 `editor_uid` = 模型（审计）；批注里记为协作者 `co_editor` |
+| `X-Wikipali-User-Token` | `<userToken>` | **人类授权**：列 channel / 建模型 / 瞬时签发 access token 与批注写入授权（agent-grant） |
 
 ## 2. 工具按类型取头
 
 | 工具 | 需要的头 |
 |---|---|
-| 读端 17 个 + `wikipali_endpoint` | 无 |
+| 读端 22 个 + `wikipali_endpoint` | 无（`note_context` 的 channel 给名字时要 `X-Wikipali-User-Token`） |
 | `whoami` / `ensure_model` / `revoke` / `channels` / `grant` / `my_terms` | `X-Wikipali-User-Token`（缺省回退 `Authorization`） |
 | `write` / `term_add` / `term_edit`（含 `_preview` 与 `_commit`） | `Authorization` + `X-Wikipali-User-Token` |
-| `discuss_add` / `discuss_reply` | 只需 `Authorization` |
+| `discuss` / `discuss_range`（读） | `Authorization`（channel 给名字时另要 `X-Wikipali-User-Token`） |
+| `discuss_add` / `discuss_reply` / `discuss_edit` / `discuss_delete` / `note_push`（含 `_preview` 与 `_commit`） | `Authorization` + `X-Wikipali-User-Token` |
+
+### 批注写入授权（v3 agent-grant）
+
+批注走 `/v3/discussions`，**写入要人类授权**：server 从 modelToken 的 payload 取模型 uid，
+用 userToken 调 `POST /v3/agent-grants` 为模型签一张「该句所在 channel + book」的写入授权，
+写请求带 `Authorization: Bearer <modelToken>` 与 `X-Agent-Grant: <授权>`。服务端署名为授权人
+（`editor`），模型记为协作者（`co_editor`）。授权每次写入瞬时签发、用完即弃，不缓存
+（插件版缓存在凭据文件里，MCP 无状态所以不缓存）。
 
 ## 3. 首次准备
 

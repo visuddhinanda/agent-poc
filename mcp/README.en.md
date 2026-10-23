@@ -2,7 +2,7 @@
 
 # WikiPali MCP Server
 
-**Every [WikiPali](https://www.wikipali.org) capability, wrapped as 35 MCP tools**
+**Every [WikiPali](https://www.wikipali.org) capability, wrapped as 48 MCP tools**
 
 A stateless Streamable HTTP service · no credentials stored, supplied per request as headers
 
@@ -17,7 +17,7 @@ A stateless Streamable HTTP service · no credentials stored, supplied per reque
 ---
 
 The bottom layer of `agent-poc`. A native TypeScript rewrite of every WikiPali capability from
-[wikipali-plugins](https://github.com/iapt-platform/wikipali-plugins) as **35 MCP tools**
+[wikipali-plugins](https://github.com/iapt-platform/wikipali-plugins) as **48 MCP tools**
 (`wikipali_*`), built on `@modelcontextprotocol/sdk` and served over stateless Streamable HTTP.
 
 All three kinds of clients — agent tooling, editor plugins, and the LangGraph server — talk to
@@ -75,7 +75,7 @@ The token is never printed and the server never reads that file. Full flow:
 ## Test and build
 
 ```bash
-npm test                  # 24 tests
+npm test                  # 40 tests
 npm run typecheck
 npm run build             # tsc -> dist/
 ```
@@ -99,7 +99,7 @@ MCP_HOST=0.0.0.0 MCP_ALLOWED_HOSTS=mcp.example.com node dist/index.js
 
 ## Design docs
 
-- [Tool catalogue and semantics](../docs/mcp-tools.md) — the 35 tools, source layout, contracts that must not change
+- [Tool catalogue and semantics](../docs/mcp-tools.md) — the 48 tools, source layout, contracts that must not change
 - [Credential model](../docs/credentials.md) — two tokens, per-tool header selection, the forwarding chain
 - [Architecture and data flow](../docs/architecture.md) — the full four-layer picture
 

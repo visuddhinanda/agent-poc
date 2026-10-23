@@ -10,7 +10,7 @@ Four services · MCP tools reach the corpus, AG-UI streams the conversation, Cop
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![LangGraph](https://img.shields.io/badge/agent-LangGraph-blue.svg)](backend)
-[![MCP](https://img.shields.io/badge/tools-MCP%20%C3%9735-orange.svg)](mcp)
+[![MCP](https://img.shields.io/badge/tools-MCP%20%C3%9748-orange.svg)](mcp)
 [![CopilotKit](https://img.shields.io/badge/ui-CopilotKit-purple.svg)](web)
 
 </div>
@@ -43,7 +43,7 @@ browser ──▶ web (:3000/3002) ──▶ runtime (:3001) ──▶ backend (
 | [`web/`](web/README.en.md) | Next.js frontend | 3000 (3002 in the full stack) | Chat UI, citation cards |
 | [`runtime/`](runtime/README.en.md) | CopilotKit Runtime | 3001 | Translates to AG-UI, streams SSE back |
 | [`backend/`](backend/README.en.md) | LangGraph agent | 8800 | FastAPI + AG-UI, calls the LLM and tools |
-| [`mcp/`](mcp/README.en.md) | WikiPali MCP server | 3000 | 35 `wikipali_*` tools |
+| [`mcp/`](mcp/README.en.md) | WikiPali MCP server | 3000 | 48 `wikipali_*` tools |
 
 Dependencies run **one way**: each layer knows only the one below it. Every service starts
 and deploys independently — see its own README for setup and deployment.
@@ -56,7 +56,7 @@ and deploys independently — see its own README for setup and deployment.
 
 - [Architecture and data flow](docs/architecture.md) — four layers, request flow, degradation
 - [Credential model (two tokens)](docs/credentials.md) — write authorization and header forwarding
-- [MCP tool catalogue and semantics](docs/mcp-tools.md) — the 35 tools and the contracts behind them
+- [MCP tool catalogue and semantics](docs/mcp-tools.md) — the 48 tools and the contracts behind them
 
 Design docs are currently written in Chinese only.
 

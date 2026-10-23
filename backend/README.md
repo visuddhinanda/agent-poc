@@ -17,7 +17,7 @@ FastAPI 以 AG-UI 协议暴露 · 无状态，写端凭据只随请求头传入
 ---
 
 `agent-poc` 的 agent 层。用 `langchain-mcp-adapters` 连接 [`../mcp`](../mcp/README.md)，
-加载 35 个 `wikipali_*` 工具访问真实语料，再以 **AG-UI 协议**通过 FastAPI 暴露给
+加载 48 个 `wikipali_*` 工具访问真实语料，再以 **AG-UI 协议**通过 FastAPI 暴露给
 CopilotKit Runtime。
 
 ## 在整条链路中的位置

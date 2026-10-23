@@ -47,7 +47,7 @@ WikiPali API (www / next.wikipali.org)
 |---|---|
 | `DEEPSEEK_API_KEY` | backend 走内置 mock 演示模型（`mock_llm.py`），回答带「（mock 演示模式）」前缀 |
 | MCP server 不可用 | backend 回退到内置 mock 检索工具 `retrieve_sutta_passage` |
-| 无写端凭据 | 全链路降为纯读模式，读端 17 个工具无需凭据 |
+| 无写端凭据 | 全链路降为纯读模式，读端 22 个工具无需凭据 |
 
 因此仅启动 backend + runtime + web（不启动 mcp、不配 key）也能跑通演示。
 

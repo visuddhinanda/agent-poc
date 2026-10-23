@@ -17,7 +17,7 @@ Exposed by FastAPI over the AG-UI protocol · stateless, write credentials arriv
 ---
 
 The agent layer of `agent-poc`. It connects to [`../mcp`](../mcp/README.en.md) via
-`langchain-mcp-adapters`, loads 35 `wikipali_*` tools that reach the real corpus, and exposes
+`langchain-mcp-adapters`, loads 48 `wikipali_*` tools that reach the real corpus, and exposes
 the agent through FastAPI over the **AG-UI protocol** for the CopilotKit Runtime.
 
 ## Where it sits

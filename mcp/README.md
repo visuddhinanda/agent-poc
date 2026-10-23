@@ -2,7 +2,7 @@
 
 # WikiPali MCP Server
 
-**把 [WikiPali](https://www.wikipali.org) 的全部访问能力封装成 35 个 MCP 工具**
+**把 [WikiPali](https://www.wikipali.org) 的全部访问能力封装成 48 个 MCP 工具**
 
 无状态 Streamable HTTP 服务 · 凭据不落 server，随请求头逐次传入
 
@@ -17,7 +17,7 @@
 ---
 
 `agent-poc` 的最底层服务。把 [wikipali-plugins](https://github.com/iapt-platform/wikipali-plugins)
-里的 WikiPali 访问能力，用 TypeScript + `@modelcontextprotocol/sdk` 原生重写为 **35 个 MCP 工具**
+里的 WikiPali 访问能力，用 TypeScript + `@modelcontextprotocol/sdk` 原生重写为 **48 个 MCP 工具**
 （`wikipali_*`），以无状态 Streamable HTTP 对外提供。
 
 三类客户端——agent 工具、编辑器 plugin、LangGraph server——都只连这一个服务。
@@ -70,7 +70,7 @@ token 不打印，server 不读这个文件。完整流程见[凭据模型](../d
 ## 测试与构建
 
 ```bash
-npm test                  # 24 个测试
+npm test                  # 40 个测试
 npm run typecheck
 npm run build             # tsc -> dist/
 ```
@@ -94,7 +94,7 @@ MCP_HOST=0.0.0.0 MCP_ALLOWED_HOSTS=mcp.example.com node dist/index.js
 
 ## 设计文档
 
-- [工具清单与语义](../docs/mcp-tools.md) —— 35 个工具、源码结构、必须保留的调用约定
+- [工具清单与语义](../docs/mcp-tools.md) —— 48 个工具、源码结构、必须保留的调用约定
 - [凭据模型](../docs/credentials.md) —— 双 token、工具按类型取头、透传链路
 - [架构与数据流](../docs/architecture.md) —— 四层链路全貌
 

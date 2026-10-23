@@ -10,7 +10,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![LangGraph](https://img.shields.io/badge/agent-LangGraph-blue.svg)](backend)
-[![MCP](https://img.shields.io/badge/tools-MCP%20%C3%9735-orange.svg)](mcp)
+[![MCP](https://img.shields.io/badge/tools-MCP%20%C3%9748-orange.svg)](mcp)
 [![CopilotKit](https://img.shields.io/badge/ui-CopilotKit-purple.svg)](web)
 
 </div>
@@ -43,7 +43,7 @@
 | [`web/`](web/README.md) | Next.js 前端 | 3000（全链路时 3002） | 聊天界面、经文引用卡片 |
 | [`runtime/`](runtime/README.md) | CopilotKit Runtime | 3001 | 转 AG-UI 协议、流回 SSE |
 | [`backend/`](backend/README.md) | LangGraph Agent | 8800 | FastAPI + AG-UI，调 LLM 与工具 |
-| [`mcp/`](mcp/README.md) | WikiPali MCP Server | 3000 | 35 个 `wikipali_*` 工具 |
+| [`mcp/`](mcp/README.md) | WikiPali MCP Server | 3000 | 48 个 `wikipali_*` 工具 |
 
 依赖是**单向**的：上层只认识下一层。每个服务都可独立启动、独立部署，
 安装与部署细节见各自 README。
@@ -55,7 +55,7 @@
 
 - [架构与数据流](docs/architecture.md) —— 四层链路、请求流程、降级策略
 - [凭据模型（双 token）](docs/credentials.md) —— 写端授权与全链路透传
-- [MCP 工具清单与语义](docs/mcp-tools.md) —— 35 个工具与必须保留的调用约定
+- [MCP 工具清单与语义](docs/mcp-tools.md) —— 48 个工具与必须保留的调用约定
 
 ## 仓库结构
 
