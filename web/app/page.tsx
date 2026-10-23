@@ -281,9 +281,52 @@ function ThinkingCursor() {
   );
 }
 
+/** 深度思考开关：关时 agent 走快速路径，开时多查几轮再作答（docs/agent-routing.md）。 */
+function DeepToggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={() => onChange(!on)}
+      style={{
+        alignSelf: "flex-start",
+        margin: "0 0 8px",
+        padding: "4px 12px",
+        borderRadius: 999,
+        border: `1px solid ${on ? "#a33a2b" : "#d8cdb4"}`,
+        background: on ? "#a33a2b" : "#f3ecdc",
+        color: on ? "#fdfaf1" : "#6b5f4e",
+        fontSize: 13,
+        cursor: "pointer",
+      }}
+    >
+      {on ? "◉" : "○"} 深度思考
+    </button>
+  );
+}
+
 function Chat() {
   const { agent } = useAgent({ agentId: "pali_agent" });
   useRenderTool({ name: "*", render: ToolCallBubble }, []);
+
+  // 深度思考默认关。CopilotChat 自带输入框、拦不到「发送」，所以开关一变就写进 agent state，
+  // 下次发送随 RunAgentInput.state 带给后端；每次运行结束后后端会回灌整份 state（消息、
+  // 检索计划等），这里收回成只剩这一项，免得下次请求把它们原样带回去。
+  const [deep, setDeep] = useState(false);
+  const deepRef = useRef(deep);
+  deepRef.current = deep;
+  useEffect(() => {
+    agent.setState({ deep_thinking: deep });
+  }, [agent, deep]);
+  useEffect(() => {
+    const sub = agent.subscribe({
+      onRunFinalized: () => {
+        agent.setState({ deep_thinking: deepRef.current });
+      },
+    });
+    return () => sub.unsubscribe();
+  }, [agent]);
 
   // 从工具返回结果里收集坐标 → citation 映射。
   // 兼容两种结构：mock 的 [{passageId, ...}] 数组，与 wikipali_search 的 {rows:[{coord, ...}]} 对象。
@@ -310,6 +353,9 @@ function Chat() {
 
   return (
     <CitationsContext.Provider value={citations}>
+      <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <DeepToggle on={deep} onChange={setDeep} />
+      <div style={{ flex: 1, minHeight: 0 }}>
       <CopilotChat
         agentId="pali_agent"
         chatView={{
@@ -322,6 +368,8 @@ function Chat() {
           welcomeScreen: WelcomeScreen,
         }}
       />
+      </div>
+      </div>
     </CitationsContext.Provider>
   );
 }
