@@ -56,6 +56,7 @@
 - [架构与数据流](docs/architecture.md) —— 四层链路、请求流程、降级策略
 - [凭据模型（双 token）](docs/credentials.md) —— 写端授权与全链路透传
 - [MCP 工具清单与语义](docs/mcp-tools.md) —— 48 个工具与必须保留的调用约定
+- [Agent 研究路径与深度思考](docs/agent-routing.md) —— 路由、四条研究路径、阅读页提问上下文、日志
 
 ## 仓库结构
 

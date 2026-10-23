@@ -57,6 +57,7 @@ and deploys independently — see its own README for setup and deployment.
 - [Architecture and data flow](docs/architecture.md) — four layers, request flow, degradation
 - [Credential model (two tokens)](docs/credentials.md) — write authorization and header forwarding
 - [MCP tool catalogue and semantics](docs/mcp-tools.md) — the 48 tools and the contracts behind them
+- [Agent research routes and deep thinking](docs/agent-routing.md) — routing, research paths, reader-question context, logging (Chinese)
 
 Design docs are currently written in Chinese only.
 
