@@ -69,6 +69,14 @@ const listener = createCopilotNodeListener({
  */
 const logRequests = process.env.RUNTIME_LOG !== "0";
 const server = createServer((req, res) => {
+  // 客户端 IP：backend 记游客 IP、算同 IP 额度用（docs/trace.md）。
+  // CopilotKit 默认不转发 X-Forwarded-For / X-Real-IP，所以这里另起一个 x-* 头交给它透传；
+  // 一律覆盖客户端自己带来的同名头，免得游客伪造 IP 绕过额度。
+  // 线上在 nginx 后面：TRUST_PROXY=1，取 nginx 设的 X-Real-IP（proxy_set_header X-Real-IP $remote_addr）；
+  // 直连（本地开发）用 socket 地址。
+  const proxied = process.env.TRUST_PROXY === "1" ? req.headers["x-real-ip"] : undefined;
+  const clientIp = (typeof proxied === "string" && proxied) || req.socket.remoteAddress || "";
+  req.headers["x-wikipali-client-ip"] = clientIp.replace(/^::ffff:/, "");
   if (logRequests) {
     const started = Date.now();
     let done = false;

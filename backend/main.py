@@ -21,6 +21,9 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from agent import build_graph, retrieve_sutta_passage
 from routing import build_routed_graph
+import mint
+import quota
+import agent_trace
 from mcp_tools import load_wikipali_tools, set_wikipali_credentials
 from obs import ObsCallback, brief, end_run, log, start_run
 
@@ -92,6 +95,8 @@ def health():
         "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         "api_key_configured": bool(os.getenv("DEEPSEEK_API_KEY")),
         "mcp_connected": _mcp_client is not None,
+        # 研究过程入库与提问扣费是否开启（ops 上线后确认这一项为 true）
+        "trace_enabled": mint.enabled(),
     }
 
 
@@ -112,18 +117,44 @@ async def agent_endpoint(input_data: RunAgentInput, request: Request):
             authorization=request.headers.get("Authorization"),
             user_token=request.headers.get("X-Wikipali-User-Token"),
         )
-        start_run(input_data.run_id, input_data.thread_id)
+        stats = start_run(input_data.run_id, input_data.thread_id)
+        state = input_data.state if isinstance(input_data.state, dict) else {}
+        ctx = mint.ClientContext.from_request(request.headers, state)
         last_user = next(
             (m for m in reversed(input_data.messages or []) if getattr(m, "role", None) == "user"),
             None,
         )
+        content = getattr(last_user, "content", "") or ""
+        stats.question = content if isinstance(content, str) else str(content)
+        stats.user_message_id = getattr(last_user, "id", None)
+        stats.deep = bool(state.get("deep_thinking"))
+        stats.passage = state.get("passage") if isinstance(state.get("passage"), dict) else None
         log(
             "start",
             thread=input_data.thread_id,
             msgs=len(input_data.messages or []),
-            state=brief(input_data.state or {}, 400),
-            q=brief(getattr(last_user, "content", "") or "", 120),
+            state=brief({k: v for k, v in state.items() if k != "client"}, 400),
+            q=brief(stats.question, 120),
         )
+
+        charge = await quota.charge(ctx, input_data.run_id, input_data.thread_id, stats.deep)
+        if charge.status in ("forbidden", "unavailable", "invalid"):
+            # 不跑研究、不扣费，只回一条说明：别人的会话 / 网络访问错误 / 请求无效
+            for event in quota.denied_events(input_data.thread_id, input_data.run_id, charge.data or {}, quota_card=False):
+                yield encoder.encode(event)
+            end_run(None)
+            # 网络错误那次也要有记录：mint 连不上时进补发队列，恢复后补上。
+            # 别人的会话、请求无效的入库同样会被 mint 拒，不必发
+            if charge.status == "unavailable":
+                agent_trace.submit(stats, ctx, "denied")
+            return
+        if charge.status == "denied":
+            for event in quota.denied_events(input_data.thread_id, input_data.run_id, charge.data or {}):
+                yield encoder.encode(event)
+            end_run(None)
+            agent_trace.submit(stats, ctx, "denied")
+            return
+
         error = None
         try:
             async for event in request_agent.run(input_data):
@@ -133,6 +164,12 @@ async def agent_endpoint(input_data: RunAgentInput, request: Request):
             raise
         finally:
             end_run(error)
+            if error is None:
+                agent_trace.submit(stats, ctx, "ok")
+            elif isinstance(error, (asyncio.CancelledError, GeneratorExit)):
+                agent_trace.submit(stats, ctx, "cancelled", repr(error)[:2000])
+            else:
+                agent_trace.submit(stats, ctx, "error", repr(error)[:2000])
 
     return StreamingResponse(
         event_generator(),

@@ -122,6 +122,11 @@ else
   _pid=$!; PIDS+=("$_pid"); record_pid backend "$_pid"
 fi
 wait_for backend "http_code http://127.0.0.1:${BACKEND_PORT}/health | grep -q 200" 40 || FAIL=1
+# 没配 AGENT_SERVICE_KEY（或 mint 地址）时 backend 不扣费、不入库：本地可以，但要让人知道
+if curl -s -m 3 "http://127.0.0.1:${BACKEND_PORT}/health" | grep -q '"trace_enabled":false'; then
+  info "⚠️  backend 没配 AGENT_SERVICE_KEY：这次不扣费、不记录提问（trace_enabled=false）。"
+  info "   要联调额度与入库，在 backend/.env 配上与 mint .env 相同的 AGENT_SERVICE_KEY 后重启。见 docs/trace.md §8"
+fi
 info "backend mcp_connected=$(curl -sS --max-time 3 http://127.0.0.1:${BACKEND_PORT}/health 2>/dev/null | grep -oE '"mcp_connected":[a-z]+' | cut -d: -f2)"
 
 # ---- 3/4 runtime ------------------------------------------------------------
@@ -143,10 +148,13 @@ if port_in_use "$WEB_PORT"; then
 else
   cd "$ROOT/web" || exit 1
   [ -d node_modules ] || npm install --cache "$ROOT/.npm-cache" >/dev/null
-  (exec npm run dev -- -p "$WEB_PORT" > "$LOGDIR/web.log" 2>&1) &
+  # 本地 mint 在另一个端口：额度 / 会话历史直连它，引用链接的主机算受信（线上同源，不需要这两项）
+  (export NEXT_PUBLIC_MINT_API_URL="${NEXT_PUBLIC_MINT_API_URL:-$MCP_API_URL}" \
+          NEXT_PUBLIC_TRUSTED_HOSTS="${NEXT_PUBLIC_TRUSTED_HOSTS:-127.0.0.1,localhost}"
+   exec npm run dev -- -p "$WEB_PORT" > "$LOGDIR/web.log" 2>&1) &
   _pid=$!; PIDS+=("$_pid"); record_pid web "$_pid"
 fi
-wait_for web "http_code http://127.0.0.1:${WEB_PORT}/ | grep -q 200" 90 || FAIL=1
+wait_for web "http_code http://127.0.0.1:${WEB_PORT}/agent/chat | grep -q 200" 90 || FAIL=1
 
 # ---- 汇总 -------------------------------------------------------------------
 log ""
@@ -156,9 +164,9 @@ if [ "$FAIL" = "0" ]; then
   log "   MCP server       http://127.0.0.1:${MCP_PORT}/mcp"
   log "   LangGraph backend http://127.0.0.1:${BACKEND_PORT} (AG-UI POST /)"
   log "   CopilotKit runtime http://127.0.0.1:${RUNTIME_PORT}/api/copilotkit"
-  log "   Web 界面         http://localhost:${WEB_PORT}"
+  log "   Web 界面         http://localhost:${WEB_PORT}/agent/chat"
   log ""
-  log "   浏览器打开 http://localhost:${WEB_PORT} 即可对话。"
+  log "   浏览器打开 http://localhost:${WEB_PORT}/agent/chat 即可对话。"
   log "   Ctrl+C 停止全部服务；或 ./dev-up.sh stop"
   log "========================================================"
 else
