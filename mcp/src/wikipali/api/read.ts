@@ -318,23 +318,97 @@ export async function ref(client: WikiClient, args: { coords: string[] }): Promi
   };
 }
 
-export async function toc(
-  client: WikiClient,
-  args: { coord: string; depth: number; all: boolean },
-): Promise<Row> {
-  const [book, para] = parseCoord(args.coord);
-  const data = await guarded(`取 ${book}:${para} 的章节目录`, async () =>
-    client.call("GET", "v2/palitext", { query: { view: "book-toc", book: String(book), para: String(para) }, timeout: READ_TIMEOUT }),
-  );
-  const rows = rowsOf(data);
-  const shown = args.all ? rows : rows.filter((r) => r.book === book);
-  const out = shown
-    .filter((r) => (Number(r.level) || 1) <= args.depth)
-    .map((r) => ({ coord: `${r.book}:${r.paragraph}`, level: r.level, toc: r.toc }));
+const LAYER_LABEL: Record<string, string> = { mula: "根本", atthakatha: "义注", tika: "复注", anna: "其他" };
+
+/** GET /v3/tipitaka-chapters，翻页取齐（或取到 limit 条）。 */
+async function fetchChapters(client: WikiClient, query: Record<string, string>, what: string, limit?: number): Promise<{ rows: Row[]; total: number }> {
+  const rows: Row[] = [];
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const perPage = limit === undefined ? 1000 : Math.min(1000, limit - rows.length);
+    const body = (await guarded(what, async () =>
+      client.call("GET", "v3/tipitaka-chapters", {
+        v3: true, envelope: true, timeout: READ_TIMEOUT,
+        query: { ...query, page: String(page), per_page: String(perPage) },
+      }),
+    )) as Row;
+    const batch: Row[] = body?.data ?? [];
+    const meta: Row = body?.meta ?? {};
+    total = Number(meta.total ?? batch.length);
+    rows.push(...batch);
+    if (!batch.length || rows.length >= total || (limit !== undefined && rows.length >= limit) || page >= Number(meta.last_page ?? page)) {
+      return { rows, total };
+    }
+    page += 1;
+  }
+}
+
+function zhName(row: Row): string {
+  for (const t of row.translations ?? []) if (String(t.lang ?? "").startsWith("zh")) return String(t.title ?? "");
+  return "";
+}
+
+/** 章节一行：坐标、标题、中文译名、层次、体量、路径。 */
+function chapterRow(r: Row, withScore: boolean): Row {
+  const out: Row = {
+    coord: `${r.book}-${r.para}`,
+    level: r.level,
+    title: r.title,
+    zh: zhName(r) || undefined,
+    layer: LAYER_LABEL[r.layer] ?? r.layer,
+    paragraphs: r.paragraphs,
+    chars: r.chars,
+    path: (r.path ?? []).slice(1).map((x: Row) => x.title).join(" › ") || undefined,
+  };
+  if (withScore) out.score = r.score;
+  return out;
+}
+
+/**
+ * 一本书（或其中一章）的全部标题，按经文顺序：GET /v3/tipitaka-chapters?book=&para=&max_level=。
+ * coord 给书号（如 "162"）或 book-para；para 不是章节起始段时退回整本书。
+ */
+export async function toc(client: WikiClient, args: { coord: string; depth: number }): Promise<Row> {
+  const raw = String(args.coord).trim();
+  const [book, para] = /^\d+$/.test(raw) ? [Number(raw), 0] : parseCoord(raw);
+  const query: Record<string, string> = { book: String(book), max_level: String(args.depth) };
+  let scope = `book ${book}`;
+  let rows: Row[] = [];
+  const notes: string[] = [];
+  if (para) {
+    rows = (await fetchChapters(client, { ...query, para: String(para) }, `取 ${book}:${para} 的章节目录`)).rows;
+    scope = `${book}:${para} 这一章`;
+    if (!rows.length) {
+      notes.push(`${book}:${para} 不是章节起始段，改列整本书的目录。`);
+      scope = `book ${book}`;
+    }
+  }
+  if (!rows.length) rows = (await fetchChapters(client, query, `取 book ${book} 的章节目录`)).rows;
+  if (!rows.length) throw new WpError(`book ${book} 没有章节目录（书号不对？用 wikipali_books 看全部书）。`);
   return {
+    scope,
     total: rows.length,
-    rows: out,
-    notes: args.all ? [] : [`返回整套丛书目录共 ${rows.length} 条，已过滤到 book ${book}（all=true 看整套）。`],
+    rows: rows.map((r) => chapterRow(r, false)),
+    notes: [...notes, `层级 ≤ ${args.depth}（depth 调整）。选好一章后用 wikipali_chapter 看体量，再用 wikipali_chapter_fetch 取文。`],
+  };
+}
+
+/** 按章节名找坐标：GET /v3/tipitaka-chapters?q=（不分变音符号、容错、可用中文译名）。 */
+export async function locate(
+  client: WikiClient,
+  args: { name: string; layer?: string; book?: number; limit: number },
+): Promise<Row> {
+  const query: Record<string, string> = { q: args.name };
+  if (args.layer) query.layer = args.layer;
+  if (args.book) query.book = String(args.book);
+  const { rows, total } = await fetchChapters(client, query, `按名字找章节「${args.name}」`, args.limit);
+  return {
+    total,
+    rows: rows.map((r) => chapterRow(r, true)),
+    notes: rows.length
+      ? ["score：相等 1、开头相同 0.95、包含 0.9，拼错的 ≤ 0.85（先核对名字再用）。同名的根本、义注、复注都会列出。"]
+      : [`没有名字像「${args.name}」的章节。换个写法（只写核心部分，或用中文译名），或用 wikipali_books 选书再 wikipali_toc。`],
   };
 }
 
@@ -553,6 +627,42 @@ export async function tipitakaContent(
     grouped[paraNo]!.push({ id: sid, text });
   }
   return order.map((n) => ({ para: n, sentences: grouped[n]! }));
+}
+
+/**
+ * 整章取文（默认）：GET /v3/tipitaka-reading/{channel}?book=&chapter=，直接读库、按游标取全。
+ * 返回形状与 tipitakaContent 相同：[{para, sentences: [{id, text}]}]。正文不夹版本页码。
+ */
+export async function tipitakaReading(
+  client: WikiClient,
+  book: number,
+  para: number,
+  channel?: string,
+  asText = true,
+): Promise<Row[]> {
+  const uid = channel || (await paliChannel(client));
+  const query: Record<string, string> = {
+    book: String(book), chapter: String(para), unit: "para", page_size: "200",
+    format: asText ? "text" : "html", include: "sentences",
+  };
+  const rows: Row[] = [];
+  for (;;) {
+    const body = (await guarded(`取 ${book}:${para} 的整章内容`, async () =>
+      client.call("GET", `v3/tipitaka-reading/${uid}`, { query, v3: true, envelope: true, timeout: READ_TIMEOUT }),
+    )) as Row;
+    rows.push(...(body?.data ?? []));
+    const cursor = body?.meta?.next_cursor;
+    if (!cursor) break;
+    query.after = String(cursor);
+  }
+  const out: Row[] = [];
+  for (const row of rows) {
+    const sentences = (row.sentences ?? [])
+      .map((s: Row) => ({ id: s.sid, text: (asText ? stripMarkup(String(s.html ?? "")) : String(s.html ?? "").replace(/\s+/g, " ")).trim() }))
+      .filter((s: Row) => s.text);
+    if (sentences.length) out.push({ para: Number(row.para), sentences });
+  }
+  return out;
 }
 
 export function pickBody(child: Row, wantedChannels: string[]): string | null {

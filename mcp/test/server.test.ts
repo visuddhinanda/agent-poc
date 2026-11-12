@@ -14,9 +14,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpServer } from "../src/server.ts";
 
 const EXPECTED_TOOLS = [
-  // 读端（22）
+  // 读端（23）
   "wikipali_forms", "wikipali_word", "wikipali_count", "wikipali_terms", "wikipali_books",
-  "wikipali_toc", "wikipali_paras", "wikipali_chapter", "wikipali_chapter_fetch", "wikipali_get",
+  "wikipali_toc", "wikipali_locate", "wikipali_paras", "wikipali_chapter", "wikipali_chapter_fetch", "wikipali_get",
   "wikipali_ref", "wikipali_versions", "wikipali_search", "wikipali_dist", "wikipali_related",
   "wikipali_related_cs", "wikipali_related_books", "wikipali_related_paras", "wikipali_page",
   "wikipali_articles", "wikipali_article", "wikipali_anthology",

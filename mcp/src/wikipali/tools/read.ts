@@ -1,5 +1,5 @@
 /**
- * 读端 MCP 工具注册（22 项 Library 能力，全部无需登录）。
+ * 读端 MCP 工具注册（23 项 Library 能力，全部无需登录）。
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -81,17 +81,29 @@ export function registerReadTools(server: McpServer): void {
       limit: z.number().int().positive().default(40),
       refresh: z.boolean().default(false).describe("强制重新拉取书目清单"),
     },
-  }, async (args) => read.books(makeClient(), args));
+  }, async (args) => read.books(makeClient(), { ...args, tagList: args.tag_list, showTags: args.show_tags }));
 
   registerJsonTool(server, "wikipali_toc", {
-    title: "章节目录",
-    description: "章节目录：给 book-paragraph 任意段号，返回所属丛书的目录（默认过滤到当前这本书）。",
+    title: "章节目录（全部标题）",
+    description:
+      "一本书（给书号）或其中一章（给 book-paragraph）的全部标题，按经文顺序，每条带中文译名、层次与字符数。可直接当「从整本书的标题里选章」的清单。",
     inputSchema: {
-      coord: z.string().describe("book-paragraph，如 216-512"),
-      depth: z.number().int().positive().default(4).describe("最多显示到第几层"),
-      all: z.boolean().default(false).describe("显示整套丛书而不只当前这本"),
+      coord: z.string().describe("书号（如 162），或 book-paragraph（只列这一章下面的标题）"),
+      depth: z.number().int().positive().default(4).describe("只列层级不深于它的标题（1 是书名）"),
     },
   }, async (args) => read.toc(makeClient(), args));
+
+  registerJsonTool(server, "wikipali_locate", {
+    title: "按章节名找坐标",
+    description:
+      "按章节名找坐标：经名、品名、偈名、律的章节名，或公开译本里的中文译名。不分变音符号，拼错一两个字母也能找到；同名的根本、义注、复注一起列出，带段数、字符数与路径。",
+    inputSchema: {
+      name: z.string().describe("章节名，如 mahāparinibbāna、ānandattheragāthā、大般涅槃经"),
+      layer: z.string().optional().describe("只要某几层，逗号分隔：mula（根本）/ atthakatha（义注）/ tika（复注）/ anna"),
+      book: z.number().int().positive().optional().describe("只在这本书里找"),
+      limit: z.number().int().positive().default(5).describe("最多列几个"),
+    },
+  }, async (args) => read.locate(makeClient(), args));
 
   registerJsonTool(server, "wikipali_paras", {
     title: "段落清单（不取正文）",
@@ -114,12 +126,14 @@ export function registerReadTools(server: McpServer): void {
 
   registerJsonTool(server, "wikipali_chapter_fetch", {
     title: "整章取文",
-    description: "取整章内容（先看 wikipali_chapter 报的体量再决定是否取）。缺省取巴利原文；给 channel 则取该版本（一次一个）。",
+    description: "取整章内容（先看 wikipali_chapter 或 wikipali_locate / wikipali_toc 报的体量再决定是否取）。缺省取巴利原文；给 channel 则取该版本（一次一个）。",
     inputSchema: {
       coord: z.string().describe("book-paragraph，正文段也行，会自动向上找章节"),
       channel: z.string().optional().describe("channel uid；缺省取巴利原文"),
-      via: z.enum(["tipitaka-content", "chapter-content"]).default("tipitaka-content").describe("取文端点：默认 tipitaka-content；chapter-content 返回逐句多版本结构"),
+      via: z.enum(["tipitaka-reading", "tipitaka-content", "chapter-content"]).default("tipitaka-reading")
+        .describe("取文端点：默认 tipitaka-reading（直接读库，取全章）；tipitaka-content 是预建 HTML，正文夹版本页码；chapter-content 返回逐句多版本结构"),
       text: z.boolean().default(true).describe("输出纯文本（黑体转 **），false 保留 HTML"),
+      ref: z.boolean().default(true).describe("附上这一章的出处 cite（印本页码 + WikiPali 链接，多 2–4 次请求）"),
     },
   }, async (args) => {
     const client = makeClient();
@@ -128,12 +142,31 @@ export function registerReadTools(server: McpServer): void {
       const res = await read.chapterContent(client, book, para, args.channel ? [args.channel] : [], args.text);
       return { ...res, notes: ["句子 id 就是引用坐标（book-para-wordStart-wordEnd）。"] };
     }
-    const rows = await read.tipitakaContent(client, book, para, args.channel, args.text);
+    const viaContent = args.via === "tipitaka-content";
+    const rows = viaContent
+      ? await read.tipitakaContent(client, book, para, args.channel, args.text)
+      : await read.tipitakaReading(client, book, para, args.channel, args.text);
+    // 出处：取这一章正文最长那一段的 cite（服务端 ref 合成的链接，作答时照抄）。
+    // 章节起始段常是标题、偈颂前常有只写编号的段，这些段查不到出处
+    let cite: string | undefined;
+    let path: string | undefined;
+    const size = (r: { sentences?: { text?: string }[] }) => (r.sentences ?? []).reduce((n, x) => n + String(x.text ?? "").length, 0);
+    const body = [...rows].sort((a, b) => size(b) - size(a))[0];
+    if (args.ref && body) {
+      const refs = (await read.ref(client, { coords: [`${book}-${body.para}`] })) as { rows?: { cite?: string; path?: string }[] };
+      cite = refs.rows?.[0]?.cite ?? undefined;
+      path = refs.rows?.[0]?.path ?? undefined;
+    }
     return {
+      coord: `${book}-${para}`,
+      cite,
+      path,
       rows,
       notes: [
         rows.length ? "" : "该版本在本章没有句子内容。",
-        "句子 id 就是引用坐标（book-para-wordStart-wordEnd）；<code> 页码（M/V/P/T）已保留在文本里。",
+        viaContent
+          ? "句子 id 就是引用坐标（book-para-wordStart-wordEnd）；<code> 页码（M/V/P/T）已保留在文本里。"
+          : "句子 id 就是引用坐标（book-para-wordStart-wordEnd）。正文不夹印本页码，要页码用 wikipali_ref。",
       ].filter(Boolean),
     };
   });

@@ -1,14 +1,14 @@
 # MCP 工具清单与语义
 
-> 设计文档。工具由 `mcp/` 提供，全部以 `wikipali_` 前缀注册，共 48 个。
+> 设计文档。工具由 `mcp/` 提供，全部以 `wikipali_` 前缀注册，共 49 个。
 > 各工具需要哪些凭据头见 [凭据模型](./credentials.md)。
-> 对齐 [wikipali-plugins](https://github.com/iapt-platform/wikipali-plugins) 0.21.0。
+> 对齐 [wikipali-plugins](https://github.com/iapt-platform/wikipali-plugins) 0.21.0；`locate` / `toc` / `chapter_fetch` 对齐 0.27.0。
 
 ## 1. 工具清单
 
-**读端（22，无需凭据）**
+**读端（23，无需凭据）**
 
-`forms` `word` `count` `terms` `books` `toc` `paras` `chapter` `chapter_fetch`
+`forms` `word` `count` `terms` `books` `toc` `locate` `paras` `chapter` `chapter_fetch`
 `get` `ref` `versions` `search` `dist` `related` `related_cs` `related_books` `related_paras`
 `page` `articles` `article` `anthology`
 
@@ -16,6 +16,14 @@
   不再本地编书名缩写、不再自己拼前端链接。`get`（`ref=true`）与 `ref` 给任意坐标同样的出处。
 - `related_cs` / `related_books` / `related_paras`：v3 CST 锚点（书名 + 段号）。
 - `page`：印本页码 → 坐标（`nav-page`），只换算、不认书。
+- `locate`：按章节名找坐标（`GET /v3/tipitaka-chapters?q=`）——经名、品名、偈名、律或论的章节名，或公开译本的
+  中文译名；不分变音符号、容错（`score`：相等 1、开头相同 0.95、包含 0.9、拼错 ≤ 0.85），同名的根本 / 义注 /
+  复注一起列出，带段数、字符数与路径。mint 2026-11 起。
+- `toc`：一本书（给书号）或其中一章（给 book-paragraph）的全部标题，按经文顺序，带中文译名、层次与字符数
+  （`GET /v3/tipitaka-chapters?book=&para=&max_level=`）。原来的 `all`（整套丛书）去掉了。
+- `chapter_fetch`：默认走 `GET /v3/tipitaka-reading/{channel}`（直接读库、翻页取全），`ref=true`（缺省）时
+  附这一章第一个正文段的 `cite`；`via=tipitaka-content` 仍可取预建 HTML（正文夹印本页码）。
+- `books`：`show_tags` / `tag_list` 以前没传到实现里（参数名不一致），现在生效。
 
 **站点 / 身份（2）**：`endpoint`（只读）、`whoami`
 
