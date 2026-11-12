@@ -57,6 +57,8 @@
 - [凭据模型（双 token）](docs/credentials.md) —— 写端授权与全链路透传
 - [MCP 工具清单与语义](docs/mcp-tools.md) —— 48 个工具与必须保留的调用约定
 - [Agent 研究路径与深度思考](docs/agent-routing.md) —— 路由、四条研究路径、阅读页提问上下文、日志
+- [研究过程入库与会话历史](docs/trace.md) —— 入库、账号口径、保留期、续聊、web 渲染安全、部署清单
+- [额度与积分](docs/credits.md) —— 策略 JSON、账本、扣费 / 退款 / 结算、读经计时
 
 ## 仓库结构
 

@@ -58,6 +58,8 @@ and deploys independently — see its own README for setup and deployment.
 - [Credential model (two tokens)](docs/credentials.md) — write authorization and header forwarding
 - [MCP tool catalogue and semantics](docs/mcp-tools.md) — the 48 tools and the contracts behind them
 - [Agent research routes and deep thinking](docs/agent-routing.md) — routing, research paths, reader-question context, logging (Chinese)
+- [Research traces and chat history](docs/trace.md) — storage, account rules, retention, resuming chats, web rendering safety, deployment (Chinese)
+- [Quota and credits](docs/credits.md) — policy JSON, ledger, charge / refund / settlement, reading time (Chinese)
 
 Design docs are currently written in Chinese only.
 
