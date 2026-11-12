@@ -1,6 +1,22 @@
 "use client";
 
-import { useState } from "react";
+/**
+ * 侧栏：当前用户 + 新对话 + 会话历史（docs/chat.md §3.1，与 mobile 的 ChatHistoryList 同一套交互）。
+ *
+ * - 历史只给登录用户（mint `/v3/me/agent-threads`）；游客显示「登录后可查看历史」；
+ * - 「最近 / 已存档」两组，滚到底翻页；悬停出现菜单：存档 / 取消存档、改名、删除；
+ * - 删除只是对自己隐藏，服务器为防滥用、改进回答永久保留记录，确认框里写明；
+ * - 标题是用户的提问原文：一律纯文本渲染。
+ */
+import { useCallback, useEffect, useState } from "react";
+import {
+  deleteThread,
+  listThreads,
+  renameThread,
+  setThreadArchived,
+  type Me,
+  type Thread,
+} from "@/lib/mint";
 
 const colors = {
   paper: "#f7f3ea",
@@ -15,36 +31,130 @@ const colors = {
   border: "#d8cdb4",
 };
 
-interface HistoryItem {
-  id: string;
-  title: string;
-  time: string;
+function relativeTime(iso: string): string {
+  const ts = Date.parse(iso);
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < minute) return "刚刚";
+  if (diff < hour) return `${Math.floor(diff / minute)} 分钟前`;
+  if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)} 天前`;
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
-const MOCK_USER = {
-  name: "贤友",
-  avatar: "🙏",
-  status: "已登录",
-};
+const tabStyle = (active: boolean): React.CSSProperties => ({
+  flex: 1,
+  padding: "6px 0",
+  border: "none",
+  borderRadius: 6,
+  background: active ? colors.paperRaised : "transparent",
+  color: active ? colors.ink : colors.inkSoft,
+  fontWeight: active ? 600 : 400,
+  fontSize: 13,
+  cursor: "pointer",
+});
 
-const MOCK_HISTORY: HistoryItem[] = [
-  { id: "1", title: "什么是四圣谛？", time: "2 分钟前" },
-  { id: "2", title: "缘起与十二因缘的关系？", time: "1 小时前" },
-  { id: "3", title: "什么是无我（anattā）？", time: "昨天" },
-  { id: "4", title: "慈经（Karaṇīyametta Sutta）讲了什么？", time: "3 天前" },
-  { id: "5", title: "八正道的修行次第", time: "上周" },
-];
+const menuItemStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  padding: "6px 12px",
+  border: "none",
+  background: "transparent",
+  textAlign: "left",
+  fontSize: 13,
+  color: colors.ink,
+  cursor: "pointer",
+};
 
 export function Sidebar({
   open,
   isMobile,
   onClose,
+  me,
+  signedIn,
+  activeThreadId,
+  refreshKey,
+  onOpen,
+  onNewChat,
+  onSignIn,
+  onSignOut,
 }: {
   open: boolean;
   isMobile: boolean;
   onClose: () => void;
+  me: Me | null;
+  signedIn: boolean;
+  activeThreadId: string | null;
+  /** 变化时重新拉第一页（一轮问答结束、刚开了新会话）。 */
+  refreshKey: number;
+  onOpen: (threadId: string) => void;
+  onNewChat: () => void;
+  onSignIn: () => void;
+  onSignOut: () => void;
 }) {
-  const [activeId, setActiveId] = useState("1");
+  const [group, setGroup] = useState<"recent" | "archived">("recent");
+  const [items, setItems] = useState<Thread[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (nextPage: number) => {
+      if (!signedIn) return;
+      setLoading(true);
+      setFailed(false);
+      try {
+        const res = await listThreads(group === "archived", nextPage);
+        setItems((prev) => (nextPage === 1 ? res.items : [...prev, ...res.items]));
+        setPage(nextPage);
+        setHasMore(res.hasMore);
+      } catch {
+        setFailed(true);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [signedIn, group],
+  );
+
+  useEffect(() => {
+    void load(1);
+  }, [load, refreshKey]);
+
+  const removeLocally = (id: string) => setItems((prev) => prev.filter((x) => x.thread_id !== id));
+  const reloadOnError = () => {
+    alert("操作失败，请稍后再试。");
+    void load(1);
+  };
+
+  const toggleArchive = (thread: Thread) => {
+    setMenuFor(null);
+    removeLocally(thread.thread_id);
+    setThreadArchived(thread.thread_id, !thread.archived_at).catch(reloadOnError);
+  };
+  const rename = (thread: Thread) => {
+    setMenuFor(null);
+    const title = window.prompt("修改会话标题", thread.title)?.trim();
+    if (!title || title === thread.title) return;
+    setItems((prev) => prev.map((x) => (x.thread_id === thread.thread_id ? { ...x, title } : x)));
+    renameThread(thread.thread_id, title.slice(0, 255)).catch(reloadOnError);
+  };
+  const remove = (thread: Thread) => {
+    setMenuFor(null);
+    if (!window.confirm("删除这个会话？\n删除后你将看不到它。为防止滥用和改进回答，服务器仍会保留这份记录。")) {
+      return;
+    }
+    removeLocally(thread.thread_id);
+    deleteThread(thread.thread_id).catch(reloadOnError);
+    if (thread.thread_id === activeThreadId) onNewChat();
+  };
 
   const container: React.CSSProperties = {
     background: colors.paperRaised,
@@ -96,11 +206,34 @@ export function Sidebar({
             fontSize: 20,
           }}
         >
-          {MOCK_USER.avatar}
+          🙏
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, color: colors.ink }}>{MOCK_USER.name}</div>
-          <div style={{ fontSize: 12, color: colors.inkFaint }}>{MOCK_USER.status}</div>
+          {signedIn ? (
+            <>
+              <div style={{ fontWeight: 600, color: colors.ink, overflow: "hidden", textOverflow: "ellipsis" }}>
+                {me?.nickName ?? "…"}
+              </div>
+              <button
+                type="button"
+                onClick={onSignOut}
+                style={{ border: "none", background: "transparent", padding: 0, fontSize: 12, color: colors.inkFaint, cursor: "pointer" }}
+              >
+                退出登录
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontWeight: 600, color: colors.ink }}>未登录</div>
+              <button
+                type="button"
+                onClick={onSignIn}
+                style={{ border: "none", background: "transparent", padding: 0, fontSize: 12, color: colors.vermilion, cursor: "pointer" }}
+              >
+                登录 / 注册
+              </button>
+            </>
+          )}
         </div>
         {isMobile && (
           <button
@@ -126,6 +259,7 @@ export function Sidebar({
       {/* 新对话 */}
       <div style={{ padding: "12px 16px" }}>
         <button
+          onClick={onNewChat}
           style={{
             width: "100%",
             padding: "10px",
@@ -143,50 +277,136 @@ export function Sidebar({
       </div>
 
       {/* 历史列表 */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 8px 16px" }}>
-        <div style={{ padding: "0 8px 8px", fontSize: 12, color: colors.inkFaint }}>
-          我的历史问题
+      {!signedIn ? (
+        <div style={{ padding: "16px", fontSize: 13, color: colors.inkSoft, textAlign: "center" }}>
+          登录后可查看和同步提问历史
         </div>
-        {MOCK_HISTORY.map((item) => {
-          const active = item.id === activeId;
-          return (
-            <button
-              key={item.id}
-              onClick={() => {
-                setActiveId(item.id);
-                if (isMobile) onClose();
-              }}
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "10px 12px",
-                marginBottom: 4,
-                borderRadius: 8,
-                border: "none",
-                background: active ? colors.paperSunken : "transparent",
-                cursor: "pointer",
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 13,
-                  color: active ? colors.vermilion : colors.ink,
-                  fontWeight: active ? 600 : 400,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {item.title}
-              </div>
-              <div style={{ fontSize: 11, color: colors.inkFaint, marginTop: 2 }}>
-                {item.time}
-              </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 4, margin: "0 16px 8px", padding: 3, borderRadius: 8, background: colors.paperSunken }}>
+            <button type="button" style={tabStyle(group === "recent")} onClick={() => setGroup("recent")}>
+              最近
             </button>
-          );
-        })}
-      </div>
+            <button type="button" style={tabStyle(group === "archived")} onClick={() => setGroup("archived")}>
+              已存档
+            </button>
+          </div>
+          <div
+            style={{ flex: 1, overflowY: "auto", padding: "0 8px 16px" }}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              if (hasMore && !loading && el.scrollTop + el.clientHeight >= el.scrollHeight - 40) {
+                void load(page + 1);
+              }
+            }}
+          >
+            {items.map((item) => {
+              const active = item.thread_id === activeThreadId;
+              const showMenu = menuFor === item.thread_id;
+              return (
+                <div
+                  key={item.thread_id}
+                  style={{ position: "relative" }}
+                  onMouseEnter={() => setHoverId(item.thread_id)}
+                  onMouseLeave={() => setHoverId(null)}
+                >
+                  <button
+                    onClick={() => onOpen(item.thread_id)}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "10px 32px 10px 12px",
+                      marginBottom: 4,
+                      borderRadius: 8,
+                      border: "none",
+                      background: active ? colors.paperSunken : "transparent",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: active ? colors.vermilion : colors.ink,
+                        fontWeight: active ? 600 : 400,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {item.title}
+                    </div>
+                    <div style={{ fontSize: 11, color: colors.inkFaint, marginTop: 2 }}>
+                      {relativeTime(item.last_run_at)}
+                    </div>
+                  </button>
+                  {(hoverId === item.thread_id || showMenu || isMobile) && (
+                    <button
+                      type="button"
+                      aria-label="会话操作"
+                      onClick={() => setMenuFor(showMenu ? null : item.thread_id)}
+                      style={{
+                        position: "absolute",
+                        right: 6,
+                        top: 10,
+                        width: 22,
+                        height: 22,
+                        border: "none",
+                        borderRadius: 4,
+                        background: "transparent",
+                        color: colors.inkSoft,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ⋯
+                    </button>
+                  )}
+                  {showMenu && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        right: 6,
+                        top: 34,
+                        zIndex: 5,
+                        minWidth: 120,
+                        padding: "4px 0",
+                        borderRadius: 8,
+                        border: `1px solid ${colors.border}`,
+                        background: colors.paperRaised,
+                        boxShadow: "0 4px 12px rgba(58,49,40,.18)",
+                      }}
+                    >
+                      <button type="button" style={menuItemStyle} onClick={() => toggleArchive(item)}>
+                        {item.archived_at ? "取消存档" : "存档"}
+                      </button>
+                      <button type="button" style={menuItemStyle} onClick={() => rename(item)}>
+                        改名
+                      </button>
+                      <button type="button" style={{ ...menuItemStyle, color: colors.vermilion }} onClick={() => remove(item)}>
+                        删除
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {!loading && items.length === 0 && (
+              <div style={{ padding: 16, fontSize: 13, color: colors.inkSoft, textAlign: "center" }}>
+                {failed ? (
+                  <button type="button" onClick={() => void load(1)} style={{ border: "none", background: "transparent", color: colors.vermilion, cursor: "pointer" }}>
+                    加载失败，点此重试
+                  </button>
+                ) : group === "archived" ? (
+                  "没有已存档的会话"
+                ) : (
+                  "还没有提问记录"
+                )}
+              </div>
+            )}
+            {loading && <div style={{ padding: 12, fontSize: 12, color: colors.inkFaint, textAlign: "center" }}>加载中…</div>}
+          </div>
+        </>
+      )}
     </aside>
   );
 }
