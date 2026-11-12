@@ -10,6 +10,10 @@
 - *_research：节点自己构造 AIMessage(tool_calls=…)，交给 ToolNode 并行执行。工具事件照常
   经 AG-UI 流给客户端（检索气泡、引用提取都不变）。快速模式用规则自检，深度模式由
   judge（LLM）判断材料够不够，最多补查两轮。全程按预算计数。
+- question 有三条检索路线，按问题类型（qtype）决定顺序（依据见 agent-tuning/docs/retrieval-recall-2026-11.md）：
+  检索（逐词 search）、定位（凭知识说出章节名 → locate → 太长就看 toc 挑小节 → 取整章）、
+  选章（从全部书里挑书 → 从整本书的标题里挑章 → 同上）。快速模式只走第一条（没结果时退回检索），
+  深度模式 judge 说不够就换下一条。
 - answer：把检索结果压成精简的证据块，交给不绑定工具的 LLM 作答。快速模式关闭思考，
   深度模式开启思考（不绑工具，避开 DeepSeek 开思考 + 工具时必须回传 reasoning_content 的限制）。
 
@@ -17,6 +21,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -33,19 +38,47 @@ from pydantic import BaseModel, Field
 
 from obs import current_run, log
 
+# 全部研究路径（路由结果，入库为 agent_runs.route）。mint 的 AgentRun::ROUTES 与 OpenAPI 枚举要和它一致：
+# 管理后台按它画图、筛选。新增 / 改名路由时两边一起改，scripts/test_route_enum.py 会核对。
+# passage 不经规划器：带阅读页段落的提问直接走它；其余三个是 Plan.route 的取值
+ROUTES = ("question", "term", "passage", "chat")
+
 # 研究路径只用读端工具；写端与 _preview/_commit 一律不给模型
 READ_TOOLS = {
     "wikipali_forms", "wikipali_word", "wikipali_search", "wikipali_dist", "wikipali_get",
     "wikipali_ref", "wikipali_related", "wikipali_related_cs", "wikipali_chapter",
+    "wikipali_locate", "wikipali_toc", "wikipali_books", "wikipali_chapter_fetch",
 }
 
-BUDGET = {False: 6, True: 16}          # 每次运行的 MCP 调用上限：快速 / 深度
+BUDGET = {False: 14, True: 24}         # 每次运行的 MCP 调用上限：快速 / 深度（快速最多走两条路线）
 MAX_ROUNDS = {False: 1, True: 2}       # 补查 / 重规划的轮数上限
 MAX_KEYWORDS = {False: 3, True: 6}
 TERM_SEARCH_LIMIT = 40
 QUESTION_SEARCH_LIMIT = {False: 8, True: 10}
 TOO_MANY_HITS = 1000
-EVIDENCE_CHARS = {False: 14000, True: 28000}
+EVIDENCE_CHARS = {False: 20000, True: 36000}
+
+# 问题类型 → 三条路线的先后（检索 search / 定位 locate / 选章 choose）。
+# 148 道真实问题上同一判官的可作答数：术语概念类检索最强；经文内容与出处定位、选章最强；
+# 义理辨析选章最强（论藏的章节按概念组织）；列举、戒律、修行定位第一。
+QTYPES = ["concept", "text", "list", "vinaya", "practice", "doctrine", "narrative"]
+ROUTE_ORDER = {
+    "concept": ["search", "locate", "choose"],
+    "text": ["locate", "choose", "search"],
+    "list": ["locate", "search", "choose"],
+    "vinaya": ["locate", "search", "choose"],
+    "practice": ["locate", "search", "choose"],
+    "doctrine": ["choose", "search", "locate"],
+    "narrative": ["choose", "search", "locate"],
+}
+LEAF_CHARS = 8000                      # 一章超过这么多字符就往下挑小节
+NARROW_ROUNDS = {False: 2, True: 3}
+MAX_SOURCES = {False: 2, True: 3}      # 定位：最多试几个章节名
+MAX_BOOKS = {False: 1, True: 2}        # 选章：最多挑几部书
+MAX_TITLES = {False: 2, True: 3}       # 选章：每部书最多挑几章
+MAX_READ = {False: 2, True: 4}         # 一条路最多取几章全文
+MAX_LIST_LINES = 400                   # 给模型看的标题清单最多几行（多了按层级收浅）
+MIN_LOCATE_SCORE = 0.8                 # 容错命中只认很轻的拼写差异：模型自己说出的章节名，错得多的多半是另一章
 
 # 范围 tag 只能取书目清单里真实存在的值（v2/book-title），否则检索会静默 0 条
 SCOPE_TAGS = [
@@ -82,6 +115,11 @@ class Keyword(BaseModel):
     tags: str = Field(default="", description=f"检索范围，逗号分隔是「且」；只能用这些值：{', '.join(SCOPE_TAGS)}；不确定就留空")
 
 
+class Source(BaseModel):
+    name: str = Field(description="章节名：CST 的巴利罗马转写（经名、品名、偈名、律或论的章节名），不要用 DN 16 这类编号")
+    layer: str = Field(default="", description="这一章属于 mula（根本）/ atthakatha（义注）/ tika（复注）/ anna（其他）；不确定留空")
+
+
 class Plan(BaseModel):
     route: Literal["term", "question", "chat"] = Field(
         description="term：问的是一个巴利词 / 佛教术语本身的意思或用法；question：其它需要经文依据的问题；"
@@ -98,8 +136,22 @@ class Plan(BaseModel):
     )
     hypothesis: str = Field(
         default="",
-        description="question：凭你的知识写下可能的答案要点与相关经文（经名、出处），只用于指导检索，不会给用户看",
+        description="question：凭你的知识写下可能的答案要点与相关经文（具体到哪部经、谁的偈、哪一章；根本典里有没有直接说），只用于指导检索，不会给用户看",
     )
+    qtype: Literal["concept", "text", "list", "vinaya", "practice", "doctrine", "narrative"] = Field(
+        default="concept",
+        description="question 的类型：concept 术语概念的含义 / text 经文内容与出处（某经讲什么、某句出自哪里）/ "
+        "list 列举数目 / vinaya 戒律与僧团规定 / practice 修行与生活应用 / doctrine 义理辨析（概念异同、阿毗达摩分析）/ "
+        "narrative 人物事迹与故事",
+    )
+    sources: list[Source] = Field(
+        default_factory=list,
+        description="question：凭你对三藏的了解，最可能直接记载答案的章节（最有把握的在前），只用来定位，不会给用户看",
+    )
+
+
+class PickCoords(BaseModel):
+    coords: list[str] = Field(default_factory=list, description="选中的坐标（照抄清单里的 book-paragraph），最有把握的在前")
 
 
 class Judge(BaseModel):
@@ -112,13 +164,20 @@ PLAN_PROMPT = """你是巴利三藏研究助手的规划器。读用户的问题
 
 - route=term：问的是一个巴利词或佛教术语本身（是什么意思、怎么用、出处）。lemmas 给原形候选，最多 3 个。
 - route=question：其它需要经文依据的问题。keywords 给最多 {max_kw} 个巴利关键词（原形），
-  每个可配一个范围 tags；hypothesis 写下你凭知识认为的答案要点与相关经文。
+  每个可配一个范围 tags；hypothesis 写下你凭知识认为的答案要点与相关经文；qtype 给问题类型；
+  sources 给最多 {max_src} 个最可能直接记载答案的章节，**具体到篇**（某一部经、某人的偈、律的某一章、论的某一品），
+  不要只给整部书名（如只写 Theragāthā、Samantapāsādikā 没用）。用 CST 的巴利章节名，layer 标层次。
+  人物的自述与事迹：先想长老偈 / 长老尼偈里此人的偈（如 Sāriputtattheragāthā），以及义注里此人的事迹
+  （如 …ttheravatthu）；经文出处给那部经的经名；律的规定给相应犍度或学处的章名。
+  先想根本典里有没有直接说；根本典没说、只在义注里有时，才给义注的章节。说不出就留空，不要硬编。
 - route=chat：不需要查经（寒暄、问你是谁、闲聊）。
 - 拿不准是 term 还是 question 时选 question。
 - 巴利词一律给词典原形，罗马转写带变音符号（ā ī ū ṃ ṅ ñ ṭ ḍ ṇ ḷ）。每个 lemma / 关键词只能是**一个词**
   （复合词算一个词），不要给词组（如「cattāri ariyasaccāni」要给 ariyasacca）。
 - question 的关键词要有区分度：优先选目标经文特有的复合词或专名（如 dhammacakkappavattana、
   anattalakkhaṇa、mettānisaṃsa），不要用 dukkha、dhamma、bhikkhu、citta 这类到处都是的常用词。
+- 关键词选**答案段落里会出现的词**，不只是问题在谈的话题：问人名、地名、数目、出处时，把预期答案里的词
+  一起放进去（可以给它在经文里的实际词形，如表示年数、数目的复合词，检索会自动展开）；列举类问题用总称加一两个成员。
 - 问的是经文本身（佛陀说了什么）时，范围加上 mūla（如 saṃyuttanikāya,mūla）；问注释书怎么解释时才用
   aṭṭhakathā / ṭīkā；律的问题用 vinaya。"""
 
@@ -131,14 +190,28 @@ ANSWER_PROMPT = """你是「法音 Pali-QA」，专精巴利三藏（Tipiṭaka�
 1. 用用户提问的语言回答（默认中文），组织成通顺的 markdown 文章，简洁准确。
 2. 只依据检索结果作答；材料不足以支持的内容要（用用户的语言）明说检索结果里没有，不要编造经文或出处。
 3. 引用经文时**原样照抄**检索结果里给出的出处链接（形如 [dī.ni.1. 93-6; …](https://…)），不要自己拼 URL、不要改写缩写。
+   「整章」材料的链接是这一章的出处：引用其中的句子时附这条链接，需要精确到句时再加句子 id（如 94-588-14-32）。
    检索结果里没有给链接的段落，只写坐标（如 93-6），不要编链接。
    每个用到的段落都至少附一次它的出处链接（作小标题的坐标也一样要附）。
 4. 区分根本（mūla）/ 义注（aṭṭhakathā）/ 复注（ṭīkā）层次——把义注的解释当成根本的说法是学术错误。
 5. 引巴利原文时可附中文译解；不要大段照抄检索结果。
 6. 不要向用户描述检索过程（查了哪些词、哪次检索失败、换了什么词），只讲经文内容本身。"""
 
+PICK_BOOK_PROMPT = """你在帮巴利三藏研究助手**定位**答案原文（不是回答问题）。下面是全部典籍（坐标、书名、分类标签）。
+选出最可能记载答案的 {n} 部，最有把握的在前；照抄清单里的坐标。问的细节（人名、因缘、数目、词义解释）在根本典里
+通常没有、只在义注里有时，选义注；概念的分类与关系优先看论藏与《清净道论》。"""
+
+PICK_TITLE_PROMPT = """你在帮巴利三藏研究助手**定位**答案原文（不是回答问题）。下面是《{work}》的标题目录
+（坐标、标题、〔中文译名〕、字符数，缩进表示层级）。选出最可能记载答案的 {n} 个标题，越具体（越小的小节）越好；
+照抄清单里的坐标。"""
+
 PASSAGE_ANSWER_HINT = """用户是在阅读经文时提问的。检索结果里的「用户正在读的段落」是第一依据；
 有选中文字时，问题针对的就是那段文字。用义注、复注解释时要标明层次。"""
+
+# 提示词版本：研究过程入库时只存哈希，不存全文。改了任何一份提示词，哈希就变
+PROMPT_VERSION = hashlib.sha1(
+    "\n".join([PLAN_PROMPT, JUDGE_PROMPT, ANSWER_PROMPT, PASSAGE_ANSWER_HINT, PICK_BOOK_PROMPT, PICK_TITLE_PROMPT]).encode()
+).hexdigest()[:12]
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +361,19 @@ def condense(name: str, args: dict, data: Any) -> str:
             f"{r.get('layer')} {r.get('bookTitlePali')} {r.get('book')}:{','.join(map(str, (r.get('paras') or [])[:8]))}"
             for r in data.get("rows") or []
         )
+    if name == "wikipali_chapter_fetch":
+        lines = []
+        for row in data.get("rows") or []:
+            text = " ".join(f"〔{s.get('id')}〕{s.get('text')}" for s in row.get("sentences") or [])
+            lines.append(text)
+        body = _clip(" ".join(lines), LEAF_CHARS + 2000)
+        if not body:
+            return "（该章在这个版本下没有内容）"
+        where = f"｜{_clip(data['path'], 120)}" if data.get("path") else ""
+        if data.get("cite"):
+            return f"【整章 {data['cite']}{where}】{body}"
+        # 没取到服务端出处：明说只写坐标，否则模型会照「有链接」的格式自己编一个
+        return f"【整章 {data.get('coord') or args.get('coord')}{where}（本章没有出处链接，引用时只写坐标或句子 id）】{body}"
     if name == "wikipali_chapter":
         return f"所在章节：{data.get('title')}（路径 {data.get('path')}；段 {data.get('book')}-{data.get('start')}～{data.get('end')}）"
     if name == "wikipali_dist":
@@ -382,6 +468,7 @@ def build_routed_graph(tools: list, checkpointer=None):
     researcher = Researcher(tools)
     planner = fast_llm.with_structured_output(Plan, method="function_calling")
     judge = fast_llm.with_structured_output(Judge, method="function_calling")
+    picker = fast_llm.with_structured_output(PickCoords, method="function_calling")
 
     def merge_config(config, extra: dict):
         meta = {**(config or {}).get("metadata", {}), **extra["metadata"]}
@@ -400,10 +487,12 @@ def build_routed_graph(tools: list, checkpointer=None):
                 paras=passage.get("paragraphs"), deep=str(deep).lower())
             # 不在这里规划：规划器看不到段落原文。深度模式下，取完段落后由 judge 看着原文决定要不要补查
             plan: dict = {"passage": passage}
+            stats.passage = passage
             return {**reset, "route": "passage", "plan": plan}
 
         result = await planner.ainvoke(
-            [SystemMessage(content=PLAN_PROMPT.format(max_kw=MAX_KEYWORDS[deep])), *conversation(state["messages"])],
+            [SystemMessage(content=PLAN_PROMPT.format(max_kw=MAX_KEYWORDS[deep], max_src=MAX_SOURCES[deep])),
+             *conversation(state["messages"])],
             merge_config(config, HIDDEN),
         )
         plan = result.model_dump()
@@ -412,11 +501,23 @@ def build_routed_graph(tools: list, checkpointer=None):
             route = "question"  # 拿不准就走更宽的路径（逃生口）
             if not plan["keywords"]:
                 plan["keywords"] = [{"lemma": l, "tags": ""} for l in plan["lemmas"]]
-        if route == "question" and not plan["keywords"]:
+        if route == "question" and not plan["keywords"] and not plan.get("sources"):
             route = "chat" if plan["route"] == "chat" else "question"
+        if route == "question":
+            order = list(ROUTE_ORDER.get(plan.get("qtype") or "concept", ROUTE_ORDER["concept"]))
+            # 说得出具体章节名时先定位：选章（从 281 部书里挑）只在说不出章节名时更有用，挑错书的代价也大
+            if plan.get("sources") and order[0] == "choose":
+                order.remove("locate")
+                order.insert(0, "locate")
+            plan["routes"] = order
         stats.route = route
+        stats.route_raw = plan["route"]
+        stats.confidence = plan["confidence"]
+        stats.plan = plan
         log("route", route=route, raw=plan["route"], conf=plan["confidence"], lemmas=plan["lemmas"],
-            keywords=[f"{k['lemma']}|{k['tags']}" for k in plan["keywords"]], deep=str(deep).lower())
+            keywords=[f"{k['lemma']}|{k['tags']}" for k in plan["keywords"]], qtype=plan.get("qtype"),
+            sources=[f"{x['name']}|{x['layer']}" for x in plan.get("sources") or []],
+            order=plan.get("routes"), deep=str(deep).lower())
         if plan.get("hypothesis"):
             log("plan", hypothesis=plan["hypothesis"][:300])
         return {**reset, "route": route, "plan": plan}
@@ -471,12 +572,12 @@ def build_routed_graph(tools: list, checkpointer=None):
                     out.append(coords[i])
         return out[:n]
 
-    async def question_node(state: AgentState, config):
+    async def run_search(state: AgentState, keywords: list[dict], used: int, config) -> tuple[list, list, int]:
+        """检索：关键词逐词 search → 规则自检补查一次 → 取命中最前几段全文。返回 (消息, 证据 id, 已用)。"""
         deep = bool(state.get("deep_thinking"))
-        plan = state["plan"]
-        keywords = (plan.get("keywords") or [])[: MAX_KEYWORDS[deep]]
         searched: set = set()
-        msgs, results, used = await researcher.run(state, await search_calls(keywords, deep, searched), config)
+        msgs, results, n = await researcher.run({**state, "budget_used": used}, await search_calls(keywords, deep, searched), config)
+        used += n
         all_msgs, evidence = list(msgs), [m.id for m in results]
 
         # 规则自检：失败或 0 条的关键词去掉范围再搜一次；命中过多的只看黑体词条
@@ -506,7 +607,212 @@ def build_routed_graph(tools: list, checkpointer=None):
             all_msgs += m3
             evidence += [m.id for m in r3]
             used += u3
-        return {"messages": all_msgs, "budget_used": used, "evidence_ids": evidence, "rounds": 0}
+        return all_msgs, evidence, used
+
+    def chapter_lines(rows: list[dict]) -> str:
+        base = min((int(r.get("level") or 1) for r in rows), default=1)
+        return "\n".join(
+            f"{'  ' * (int(r.get('level') or 1) - base)}{r['coord']}  {r.get('title')}"
+            + (f"  〔{r['zh']}〕" if r.get("zh") else "") + f"  {r.get('chars')}"
+            for r in rows
+        )
+
+    def shallow(rows: list[dict]) -> list[dict]:
+        """标题清单太长就按层级收浅，给模型看的不超过 MAX_LIST_LINES 行。"""
+        level = max((int(r.get("level") or 1) for r in rows), default=1)
+        while len(rows) > MAX_LIST_LINES and level > 1:
+            level -= 1
+            rows = [r for r in rows if int(r.get("level") or 1) <= level]
+        return rows
+
+    def plan_hint(plan: dict) -> str:
+        """规划时模型自己的判断（推测的答案要点与出处、候选章节），给挑书挑章作参考。"""
+        parts = []
+        if plan.get("hypothesis"):
+            parts.append(f"规划时的推测（只作定位参考，可能不准）：{_clip(plan['hypothesis'], 600)}")
+        if plan.get("sources"):
+            parts.append("规划时想到的章节：" + "、".join(f"{x.get('name')}（{x.get('layer') or '?'}）" for x in plan["sources"]))
+        return "\n".join(parts)
+
+    async def pick(prompt: str, question: str, listing: str, rows: list[dict], n: int, config, hint: str = "") -> list[dict]:
+        """让模型从清单里挑 n 个坐标；只认清单里真有的。"""
+        head = f"问题：{question}" + (f"\n{hint}" if hint else "")
+        result = await picker.ainvoke(
+            [SystemMessage(content=prompt), HumanMessage(content=f"{head}\n\n{listing}")],
+            merge_config(config, HIDDEN),
+        )
+        by_coord = {r["coord"]: r for r in rows}
+        out = []
+        for raw in result.coords:
+            hit = re.search(r"(\d+)[-:](\d+)", str(raw))
+            row = by_coord.get(f"{hit.group(1)}-{hit.group(2)}") if hit else None
+            if row and row not in out:
+                out.append(row)
+        return out[:n]
+
+    async def read_chapters(state: AgentState, chapters: list[dict], used: int, config, hint: str = "") -> tuple[list, list, int]:
+        """太长的章往下挑小节（看 toc），直到每节 ≤ LEAF_CHARS 或没有小节，再取整章全文。"""
+        deep = bool(state.get("deep_thinking"))
+        question = last_question(state["messages"])
+        all_msgs: list = []
+        for _ in range(NARROW_ROUNDS[deep]):
+            long = [c for c in chapters if int(c.get("chars") or 0) > LEAF_CHARS]
+            # 往下挑小节要先给最后的取全文留够预算：宁可读一章长的，也不能挑到最后一段都没读
+            room = BUDGET[deep] - used - min(len(chapters), MAX_READ[deep])
+            if room < len(long):
+                long = long[: max(room, 0)]
+            if not long:
+                break
+            calls = [("wikipali_toc", {"coord": c["coord"], "depth": 7}) for c in long]
+            msgs, results, n = await researcher.run({**state, "budget_used": used}, calls, config)
+            all_msgs += msgs
+            used += n
+            changed = False
+            for c, res in zip(long, results):
+                rows = [r for r in (tool_json(res) or {}).get("rows") or []
+                        if r.get("coord") != c["coord"] and int(r.get("level") or 1) > int(c.get("level") or 1)]
+                if not rows:
+                    continue
+                rows = shallow(rows)
+                sub = await pick(PICK_TITLE_PROMPT.format(work=c.get("title"), n=2), question, chapter_lines(rows), rows, 2, config, hint)
+                log("narrow", chapter=c["coord"], to=[r["coord"] for r in sub])
+                if sub:
+                    chapters = [x for x in chapters if x is not c] + sub
+                    changed = True
+            if not changed:
+                break
+        # 去重：被另一章整个包住的小节不再单独读
+        chapters.sort(key=lambda c: -int(c.get("paragraphs") or 0))
+        kept: list[dict] = []
+        for c in chapters:
+            book, para = map(int, c["coord"].split("-"))
+            inside = any(int(k["coord"].split("-")[0]) == book
+                         and int(k["coord"].split("-")[1]) <= para < int(k["coord"].split("-")[1]) + max(1, int(k.get("paragraphs") or 1))
+                         for k in kept)
+            if not inside:
+                kept.append(c)
+        kept = kept[: MAX_READ[deep]]
+        if not kept:
+            return all_msgs, [], used
+        msgs, results, n = await researcher.run(
+            {**state, "budget_used": used}, [("wikipali_chapter_fetch", {"coord": c["coord"]}) for c in kept], config)
+        log("read", chapters=[f"{c['coord']} {c.get('title')} ({c.get('chars')})" for c in kept])
+        return all_msgs + msgs, [m.id for m in results if not tool_failed(m)], used + n
+
+    async def run_locate(state: AgentState, plan: dict, used: int, config) -> tuple[list, list, int]:
+        """定位：按模型说出的章节名找坐标（容错），取最像的一个，再读。"""
+        deep = bool(state.get("deep_thinking"))
+        sources = [x for x in plan.get("sources") or [] if str(x.get("name") or "").strip()][: MAX_SOURCES[deep]]
+        if not sources:
+            return [], [], used
+        calls = []
+        for x in sources:
+            args = {"name": x["name"].strip(), "limit": 3}
+            if x.get("layer") in ("mula", "atthakatha", "tika", "anna"):
+                args["layer"] = x["layer"]
+            calls.append(("wikipali_locate", args))
+        msgs, results, n = await researcher.run({**state, "budget_used": used}, calls, config)
+        used += n
+        chapters: list[dict] = []
+        for res in results:
+            rows = [r for r in (tool_json(res) or {}).get("rows") or [] if float(r.get("score") or 0) >= MIN_LOCATE_SCORE]
+            if rows and rows[0]["coord"] not in {c["coord"] for c in chapters}:
+                chapters.append(rows[0])
+        log("locate", sources=[c["name"] for c in sources], hits=[f"{c['coord']} {c.get('title')}" for c in chapters])
+        m2, evidence, used = await read_chapters(state, chapters, used, config, plan_hint(plan))
+        return msgs + m2, evidence, used
+
+    async def run_choose(state: AgentState, plan: dict, used: int, config) -> tuple[list, list, int]:
+        """选章：从全部书里挑书 → 从整本书的标题里挑章 → 再读。"""
+        deep = bool(state.get("deep_thinking"))
+        question = last_question(state["messages"])
+        msgs, results, n = await researcher.run(
+            {**state, "budget_used": used}, [("wikipali_books", {"limit": 400, "show_tags": True})], config)
+        used += n
+        books = [
+            {"coord": f"{b['book']}-{b['paragraph']}", "title": b.get("toc"), "tags": b.get("tags") or []}
+            for b in ((tool_json(results[0]) or {}).get("rows") or [] if results else [])
+        ]
+        if not books:
+            return msgs, [], used
+        listing = "\n".join(f"{b['coord']}  {b['title']}  [{', '.join(b['tags'])}]" for b in books)
+        hint = plan_hint(plan)
+        chosen_books = await pick(PICK_BOOK_PROMPT.format(n=MAX_BOOKS[deep]), question, listing, books, MAX_BOOKS[deep], config, hint)
+        all_msgs = list(msgs)
+        # 整本书只看到第 4 层：大书（如《本生》）全部标题上千条，进消息历史太重；选中的章太长时再往下看
+        tocs = [("wikipali_toc", {"coord": b["coord"], "depth": 4}) for b in chosen_books]
+        m2, r2, n2 = await researcher.run({**state, "budget_used": used}, tocs, config)
+        all_msgs += m2
+        used += n2
+        chapters: list[dict] = []
+        for b, res in zip(chosen_books, r2):
+            rows = shallow((tool_json(res) or {}).get("rows") or [])
+            if not rows:
+                continue
+            sub = await pick(PICK_TITLE_PROMPT.format(work=b["title"], n=MAX_TITLES[deep]), question,
+                             chapter_lines(rows), rows, MAX_TITLES[deep], config, hint)
+            chapters += [r for r in sub if r["coord"] not in {c["coord"] for c in chapters}]
+        log("choose", books=[f"{b['coord']} {b['title']}" for b in chosen_books], titles=[c["coord"] for c in chapters])
+        m3, evidence, used = await read_chapters(state, chapters, used, config, hint)
+        return all_msgs + m3, evidence, used
+
+    async def run_route(name: str, state: AgentState, plan: dict, used: int, config) -> tuple[list, list, int]:
+        deep = bool(state.get("deep_thinking"))
+        if name == "locate":
+            return await run_locate(state, plan, used, config)
+        if name == "choose":
+            return await run_choose(state, plan, used, config)
+        keywords = (plan.get("keywords") or [])[: MAX_KEYWORDS[deep]]
+        return await run_search(state, keywords, used, config) if keywords else ([], [], used)
+
+    async def question_node(state: AgentState, config):
+        """按问题类型走第一条路线；没取到任何材料时退回检索。快速模式再由 judge 看一眼，不够就多走一条；
+        深度模式剩下的路线交给 judge 节点决定要不要走。"""
+        deep = bool(state.get("deep_thinking"))
+        plan = dict(state["plan"])
+        order = list(plan.get("routes") or ["search"])
+        first = order.pop(0)
+        msgs, evidence, used = await run_route(first, state, plan, 0, config)
+        tried = [first]
+        if not evidence and first != "search" and "search" in order:
+            current_run().retries += 1
+            log("retry", reason="route-empty", route=first, next="search")
+            order.remove("search")
+            m2, e2, used = await run_route("search", state, plan, used, config)
+            msgs += m2
+            evidence += e2
+            tried.append("search")
+        # 快速模式：第一条路读到了东西但不一定答得了（如选章挑错了书）。用 judge 看一眼，不够就再走一条
+        if not deep and evidence and order and used < BUDGET[deep]:
+            verdict = await check_enough(state, msgs, evidence, plan, config)
+            if not verdict.enough:
+                current_run().retries += 1
+                # 说得出章节名（plan 给了 sources）时，定位比关键词检索更准：先换定位
+                nxt = "locate" if "locate" in order and plan.get("sources") else order[0]
+                order.remove(nxt)
+                log("retry", reason="not-enough", route=tried[-1], next=nxt)
+                m2, e2, used = await run_route(nxt, state, plan, used, config)
+                msgs += m2
+                evidence += e2
+                tried.append(nxt)
+        plan["routes"] = order
+        plan["tried"] = tried
+        log("routes", tried=tried, pending=order)
+        return {"messages": msgs, "budget_used": used, "evidence_ids": evidence, "rounds": 0, "plan": plan}
+
+    async def check_enough(state: AgentState, msgs: list, evidence: list, plan: dict, config) -> Judge:
+        """judge 看本轮已取到的材料够不够回答（快速 LLM、关思考）。"""
+        deep = bool(state.get("deep_thinking"))
+        text = build_evidence([*state["messages"], *msgs], set(evidence), EVIDENCE_CHARS[deep])
+        verdict: Judge = await judge.ainvoke(
+            [
+                SystemMessage(content=JUDGE_PROMPT.format(max_kw=3)),
+                HumanMessage(content=f"问题：{last_question(state['messages'])}\n\n计划：{json.dumps(plan, ensure_ascii=False)[:1500]}\n\n材料：\n{text}"),
+            ],
+            merge_config(config, HIDDEN),
+        )
+        log("judge", round=0, enough=str(verdict.enough).lower(), deep=str(deep).lower())
+        return verdict
 
     async def judge_node(state: AgentState, config):
         """深度模式：LLM 判断材料够不够，不够就按它的方案补查一轮。"""
@@ -526,6 +832,23 @@ def build_routed_graph(tools: list, checkpointer=None):
         if verdict.enough:
             return {"rounds": MAX_ROUNDS[deep]}
         current_run().retries += 1
+        plan = dict(state.get("plan") or {})
+        pending = list(plan.get("routes") or [])
+        if pending:
+            # 还有没走过的路线：先换路线，而不是在同一条路上补查
+            nxt = pending.pop(0)
+            plan["routes"] = pending
+            plan["tried"] = [*(plan.get("tried") or []), nxt]
+            log("judge-route", next=nxt, pending=pending)
+            msgs, evidence, used = await run_route(nxt, state, plan, int(state.get("budget_used") or 0), config)
+            spent = used - int(state.get("budget_used") or 0)
+            return {
+                "messages": msgs,
+                "budget_used": used,
+                "evidence_ids": [*(state.get("evidence_ids") or []), *evidence],
+                "rounds": rounds if spent else MAX_ROUNDS[deep],
+                "plan": plan,
+            }
         # 本轮已经检索过的词（计划里的 + 前几轮补查的），不再重复检索
         ids_now = set(state.get("evidence_ids") or [])
         searched = {k.get("lemma") for k in (state.get("plan") or {}).get("keywords") or []}
@@ -640,8 +963,12 @@ def build_routed_graph(tools: list, checkpointer=None):
         if route != "chat":
             evidence = build_evidence(state["messages"], ids, EVIDENCE_CHARS[deep]) or "（没有检索到材料）"
             context.append(HumanMessage(content=f"【检索结果】\n{evidence}\n\n请根据以上检索结果回答我上面的问题。"))
+            current_run().evidence = evidence
             log("answer", evidence_chars=len(evidence), thinking=str(deep).lower())
         reply = await llm.ainvoke([SystemMessage(content=system), *context], config)
+        stats = current_run()
+        stats.answer = reply.content if isinstance(reply.content, str) else str(reply.content)
+        stats.assistant_message_id = reply.id
         # reasoning_content 不进消息历史：下一轮作答不带工具，不需要回传
         return {"messages": [AIMessage(content=reply.content, id=reply.id)]}
 

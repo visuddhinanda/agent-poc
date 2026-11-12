@@ -12,7 +12,7 @@ os.environ.setdefault("DEEPSEEK_API_KEY", "offline")
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage  # noqa: E402
 
-from routing import _CallEmitter, build_evidence, condense, conversation, legacy_passage  # noqa: E402
+from routing import QTYPES, ROUTE_ORDER, Plan, _CallEmitter, build_evidence, condense, conversation, legacy_passage  # noqa: E402
 
 
 def test_legacy_passage():
@@ -65,6 +65,29 @@ def test_emitter_streams_one_call_per_chunk():
     final = asyncio.run(emitter.ainvoke([HumanMessage(content="-")]))
     assert final.id == "run-x" and [tc["id"] for tc in final.tool_calls] == ["call_a", "call_b"]
     assert final.tool_calls[0]["args"] == {"coords": ["1-2"]}
+
+
+def test_condense_chapter_fetch_keeps_sentence_ids():
+    data = {"coord": "94-585", "rows": [{"para": 588, "sentences": [
+        {"id": "94-588-14-32", "text": "vayadhammā saṅkhārā appamādena sampādethā"},
+        {"id": "94-588-33-37", "text": "Ayaṃ tathāgatassa pacchimā vācā ."}]}]}
+    text = condense("wikipali_chapter_fetch", {"coord": "94-585"}, data)
+    assert text.startswith("【整章 94-585（本章没有出处链接，引用时只写坐标或句子 id）】〔94-588-14-32〕vayadhammā"), text
+    assert "〔94-588-33-37〕Ayaṃ" in text
+    cited = condense("wikipali_chapter_fetch", {"coord": "94-585"},
+                     {**data, "cite": "[dī.ni.2. 94-586](https://x)", "path": "DN › Mahāparinibbāna"})
+    assert cited.startswith("【整章 [dī.ni.2. 94-586](https://x)｜DN › Mahāparinibbāna】〔94-588-14-32〕"), cited
+    assert condense("wikipali_chapter_fetch", {"coord": "1-2"}, {"rows": []}) == "（该章在这个版本下没有内容）"
+
+
+def test_every_qtype_orders_all_three_routes():
+    assert set(QTYPES) == set(ROUTE_ORDER) == set(Plan.model_fields["qtype"].annotation.__args__)
+    for qtype, order in ROUTE_ORDER.items():
+        assert sorted(order) == ["choose", "locate", "search"], qtype
+    # 术语概念类检索最强；经文出处类先定位；义理辨析先选章（依据见 agent-tuning 文档第七节）
+    assert ROUTE_ORDER["concept"][0] == "search"
+    assert ROUTE_ORDER["text"][0] == "locate"
+    assert ROUTE_ORDER["doctrine"][0] == "choose"
 
 
 if __name__ == "__main__":

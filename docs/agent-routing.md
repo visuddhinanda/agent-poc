@@ -84,9 +84,9 @@ START → plan ─┬─ passage  → passage ──┬────────�
 - **answer**：把本轮工具结果压成精简证据块（`condense`：检索命中给出处 + 摘要，取文给出处 + 章节路径 +
   正文），交给**不绑定工具**的 LLM 作答。快速模式关闭思考；深度模式开启思考——不绑工具，
   避开 DeepSeek「开思考 + 绑工具时每轮必须回传 reasoning_content，否则 400」的限制。
-  证据上限：快速 14k、深度 28k 字符。
-- **工具白名单**：只给 forms / word / search / dist / get / ref / related / related_cs / chapter，
-  写端与 `_preview` / `_commit` 一律不给。
+  证据上限：快速 20k、深度 36k 字符（整章取文比逐段取文长）。
+- **工具白名单**：只给 forms / word / search / dist / get / ref / related / related_cs / chapter /
+  locate / toc / books / chapter_fetch，写端与 `_preview` / `_commit` 一律不给。
 
 ### 4.1 路径
 
@@ -107,6 +107,39 @@ START → plan ─┬─ passage  → passage ──┬────────�
 | 取哪些段 | 选区所在段 ± 1 段 | 屏幕上可见的段（最多 12 段） |
 | 深度思考 开 | 取完段落后交 judge 看着原文决定是否补查 | 同左 |
 
+### 4.1b 一般问题的三条路线（2026-11-11）
+
+plan 另外给出问题类型 `qtype` 与候选章节 `sources`（凭模型对三藏的了解说出最可能记载答案的章节名，
+只用来定位、不给用户看）。三条路线：
+
+| 路线 | 做法 |
+|---|---|
+| 检索 search | 上面 4.1 的做法：关键词逐词 search → 规则自检 → 取命中最前几段 |
+| 定位 locate | `sources` 逐个 `locate`（并行），取得分 ≥ 0.8 的第一条 → 章节超过 8000 字符就看它的 `toc`，由模型挑小节（最多 2–3 轮）→ `chapter_fetch` 取全文 |
+| 选章 choose | `books`（281 部书，带 tag）→ 模型挑书 → 该书 `toc`（4 层以内）→ 模型挑章 → 同上往下挑小节 → 取全文 |
+
+挑书、挑章用快速 LLM 的结构化输出，只认清单里真有的坐标。定位、目录、书目的结果不进证据，只有取到的正文进。
+
+按 `qtype` 决定先后（依据：agent-tuning/docs/retrieval-recall-2026-11.md 第七节，148 道真实问题、同一判官）：
+
+| qtype | 顺序 |
+|---|---|
+| concept 术语概念 | 检索 → 定位 → 选章 |
+| text 经文内容与出处 | 定位 → 选章 → 检索 |
+| list 列举 / vinaya 戒律 / practice 修行 | 定位 → 检索 → 选章 |
+| doctrine 义理辨析 / narrative 人物故事 | 选章 → 检索 → 定位 |
+
+- **规划给了具体章节名（sources）时先定位**：选章要从 281 部书里挑，挑错册、挑错部的代价大，只在说不出章节名时更有用。
+  所以 qtype 的顺序以选章打头时，有 sources 就把定位提到最前（术语概念类仍先检索）。
+- 快速模式：走第一条；一段正文都没取到时退回检索；取到了就由 judge（快速 LLM）看一眼够不够，不够再走一条
+  （有 sources 时优先换定位），最多两条。
+- 深度模式先走第一条，judge 说不够就换下一条（还有没走过的路线时，先换路线，而不是在同一条路上补查）。
+- 挑书、挑章时把规划的推测与候选章节一起给模型参考。往下挑小节前先给最后取全文留够调用次数。
+- plan 的 sources 要具体到篇（某部经、某人的偈、律的某一章），不要只给整部书名；人物的自述与事迹先想长老偈 /
+  长老尼偈里此人的偈与义注里此人的事迹。关键词可以给答案里原样出现的词形（如年数、数目的复合词）。
+
+评测里只走一步时，按类型选路能作答 70/148（只用检索 40/148）；依次走完三条 90/148。
+
 ### 4.2 快速模式的规则自检
 
 | 情况 | 自动补救 |
@@ -120,11 +153,22 @@ START → plan ─┬─ passage  → passage ──┬────────�
 
 | | 快速 | 深度 |
 |---|---|---|
-| MCP 调用上限 | 6 | 16 |
+| MCP 调用上限 | 14 | 24 |
 | 补查轮数 | 1 | 2 |
 | `recursion_limit`（兜底） | 40 | 40 |
 
 judge 给出的补查关键词会与本轮已检索过的词去重；它给的坐标常带出处缩写（「saṃ.ni.5. 171-2576」），只取其中的 `book-para`。
+
+### 4.1 路由枚举是跨仓库契约
+
+路由结果（`routing.ROUTES` = question / term / passage / chat）入库为 mint 的 `agent_runs.route`，管理后台按它画图、筛选，
+OpenAPI 里是枚举（mint `AgentRun::ROUTES`，前端类型由规格生成）。
+
+- **新增 / 改名路由**：backend 的 `ROUTES` 与 mint 的 `AgentRun::ROUTES`、Resource `@return` 与控制器 `@queryParam … Enum:` 里的字面量
+  一起改，重新生成规格与两份 `schema.d.ts`，再补 dashboard-v6 `admin.stats.route.<名字>` 文案。
+- **核对**：backend `scripts/test_route_enum.py`（离线）检查规划器的取值 + passage = `ROUTES`、源码里写死的路由都在 `ROUTES` 里、
+  `ROUTES` 与 mint OpenAPI 的枚举一致；mint `AgentRouteEnumTest` 检查注释字面量 = `AgentRun::ROUTES`；dashboard-v6 少列一种路由编译不过。
+- **漏了也不丢数据**：mint 入库时不认识的路由、步骤类型照样存，只记一条警告日志（`agent trace: unknown route / step kinds`）。
 
 ## 5. 日志（第 0 步）
 
@@ -163,3 +207,25 @@ judge 给出的补查关键词会与本轮已检索过的词去重；它给的�
 
 端到端已在 Waydroid（App）与无头 Chromium（web）上走通：AI Chat 直接提问（快速 / 深度）、
 阅读页点按提问（screen）、选中文字查词 / 提问（selection，含深度）。
+
+### 6.1 三条路线上线后（2026-11-11，本地 mint + DeepSeek v4-flash）
+
+`eval_routes.py --only question`（4 题）：
+
+| | 工具次数（中位） | 总耗时（中位） | 首字耗时（中位） |
+|---|---|---|---|
+| 一般问题：快速 | 4.5 | 15.6 s | 7.0 s |
+| 一般问题：深度 | 16 | 44 s | 30 s |
+
+快速模式的路线选择：初转法轮（text）→ 定位到《转法轮经》；僧残怎么处理（vinaya）→ 定位到律藏；
+五蕴无我（doctrine）→ 选章到相应部《蕴品》的《无我相经》；慈心的利益（practice）→ 定位。
+深度模式 judge 不够时依次换路线，最多用满 24 次调用。
+
+### 6.2 用户实测后的修正（2026-11-11）
+
+「阿难尊者做佛陀的侍者有多少年？」在 web 上答「检索结果里没有」。原因：规划的候选章节只给了整部书名
+（Theragāthā-aṭṭhakathā、Mahāparinibbānasutta），人物故事类又先走选章、挑错册；快速模式没有兜底。
+同一个问题在 DeepSeek 网页版能直接说出「《长老偈》阿难偈、Paṇṇavīsativassāni」——模型知道，是规划没问出来。
+按 6.1 之后的修正（sources 具体到篇、有 sources 先定位、快速模式 judge 兜底一次、挑书挑章参考推测、预算留给取全文、
+没出处链接时证据里明说），本地 8 题：阿难侍者 3/3 答对（10.8–17.8 s），舍利弗原名、第一次结集、五盖、缘法与缘生法
+答对；大迦叶为何持头陀行读到了《迦叶相应》但挑小节没挑中 Jiṇṇasutta，仍答「没有直接回答」。
