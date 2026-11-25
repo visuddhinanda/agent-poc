@@ -97,9 +97,9 @@ def baseline(keywords):
 
 
 def phrase(keywords, mode, n):
-    data = get('v3/search', q=' '.join(keywords), search_mode=mode, resource_type='tipitaka',
-               granularity='paragraph', page_size=min(100, n))['data']
-    return [h['_source'].get('related_id') for h in data['hits']['hits']], data['hits']['total']['value']
+    res = get('v3/search', q=' '.join(keywords), search_mode=mode, resource_type='tipitaka',
+              granularity='paragraph', per_page=min(100, n))
+    return [h.get('related_id') for h in res['data']], res['meta']['total']
 
 
 def rrf(lists, k=60):

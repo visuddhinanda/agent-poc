@@ -36,11 +36,11 @@ def old_set(forms, bold):
 def new_list(query):
     out, page = [], 1
     while True:
-        data = get('v3/search', q=query, search_mode='definition', resource_type='tipitaka',
-                   granularity='paragraph', page_size=100, page=page)['data']
-        hits = data['hits']['hits']
-        total = data['hits']['total']['value']
-        out += [(h['_source'].get('related_id'), h['_score']) for h in hits]
+        res = get('v3/search', q=query, search_mode='definition', resource_type='tipitaka',
+                  granularity='paragraph', per_page=100, page=page)
+        hits = res['data']
+        total = res['meta']['total']
+        out += [(h.get('related_id'), h['score']) for h in hits]
         if not hits or len(out) >= total or page * 100 >= 10000:
             return out, total
         page += 1
